@@ -1,0 +1,21 @@
+name: keyframer_inspector
+description: A motion debugger for Flutter. Records every animation with its call site, frame times and screens, and plays recordings back, in the Keyframer Inspector.
+version: 0.1.0
+homepage: https://keyframer.dev
+repository: https://github.com/keyframer-dev/inspector/tree/main/flutter
+issue_tracker: https://github.com/keyframer-dev/inspector/issues
+topics: [animation, debugging, devtools, performance]
+
+environment:
+  sdk: '>=3.2.3 <4.0.0'
+  flutter: '>=3.16.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+  fake_async: ^1.3.1

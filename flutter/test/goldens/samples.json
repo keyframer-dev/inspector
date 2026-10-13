@@ -1,0 +1,87 @@
+{
+  "type": "samples",
+  "samples": [
+    {
+      "id": "lib/main.dart:31:5",
+      "t": 17,
+      "v": 0.0
+    },
+    {
+      "id": "lib/main.dart:31:5",
+      "t": 33,
+      "v": 0.058823529411764705
+    },
+    {
+      "id": "lib/main.dart:31:5",
+      "t": 50,
+      "v": 0.11764705882352941
+    }
+  ],
+  "frames": [
+    {
+      "t": 267,
+      "thread": "js",
+      "fps": 60,
+      "dropped": 0
+    },
+    {
+      "t": 334,
+      "thread": "ui",
+      "fps": 60,
+      "dropped": 1
+    }
+  ],
+  "drops": [
+    {
+      "t": 334,
+      "thread": "js",
+      "ms": 34.0,
+      "dropped": 1
+    },
+    {
+      "t": 201,
+      "thread": "ui",
+      "ms": 25.0,
+      "dropped": 1
+    }
+  ],
+  "markers": [
+    {
+      "kind": "navigation",
+      "t": 0,
+      "route": "/"
+    },
+    {
+      "kind": "touch",
+      "t": 334,
+      "phase": "start",
+      "id": 1,
+      "x": 120.0,
+      "y": 300.0
+    },
+    {
+      "kind": "touch",
+      "t": 350,
+      "phase": "move",
+      "id": 1,
+      "x": 160.0,
+      "y": 300.0
+    },
+    {
+      "kind": "touch",
+      "t": 366,
+      "phase": "end",
+      "id": 1,
+      "x": 180.0,
+      "y": 300.0
+    },
+    {
+      "kind": "navigation",
+      "t": 366,
+      "route": "/details",
+      "params": {
+        "id": 7
+      }
+    }
+  ]
+}

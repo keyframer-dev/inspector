@@ -1,0 +1,372 @@
+/**
+ * Motion Scan: react-scan for motion. Outlines every view while it animates, coloured by the frames
+ * its animation cost, with a small panel of UI / JS frame rates and the call sites that dropped the
+ * most frames. No Keyframer, no pairing, no server: the Babel plugin plus this component.
+ *
+ *   import { MotionScan } from '@keyframerdev/inspector/scan'
+ *
+ *   export default function Root() {
+ *     return (
+ *       <MotionScan enabled={__DEV__}>
+ *         <App />
+ *       </MotionScan>
+ *     )
+ *   }
+ *
+ * Wrap the app (rather than render it beside it) so the scan starts listening before your screens
+ * render: their first animations and styles are then reported too. When a Keyframer inspector is
+ * already connected the scan listens to it; otherwise it installs a local one (JS + UI thread).
+ *
+ * With `recorder`, a record button sits next to the pill: a tester taps it, uses the app, taps again,
+ * and shares one file the developer opens in the dev tools panel (see record.ts).
+ *
+ * Frames are counted on the UI thread (Reanimated's frame callback) and on the JS thread
+ * (requestAnimationFrame). A frame that took 2.5 refresh intervals dropped 2 frames, and those frames
+ * are charged to every animation running at that moment.
+ */
+
+import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Platform, Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native'
+import { useFrameCallback, useSharedValue } from 'react-native-reanimated'
+import { scheduleOnRN } from 'react-native-worklets'
+import { setCaptureRoot } from './capture'
+import { MotionTracker, droppedFrames, frameIntervalOf } from './motionStats'
+import { uiThreadBridge } from './native'
+import { configureRecorder, isRecording, recordingElapsed, recordTouches, startRecording, stopRecording, watchRecording, watchSaved, type RecorderConfig } from './record'
+import { createInspector, getLayouts, isCapturing, isInspectorInstalled, tapInspector, watchCapturing, watchLayouts } from './runtime'
+
+export { isInstrumented } from './runtime'
+
+export type MotionScanProps = {
+  children?: ReactNode
+  /** Off: renders the children only, measures nothing. */
+  enabled?: boolean
+  /** How long an outline lingers after its animation ends (ms). */
+  fadeMs?: number
+  /** Show the frame-rate pill (and its list of the worst call sites). */
+  showPanel?: boolean
+  /** Also show the UI thread's shortest and longest frame of the last half second. */
+  debug?: boolean
+  /**
+   * A record button for testers: records everything (values, frames, animations, touches, navigation,
+   * logs, screenshots) and shares one file. `true` uses what configureRecorder set.
+   */
+  recorder?: boolean | RecorderConfig
+  /** Where the pill sits. Top right by default; move it when it covers a navigation header. */
+  corner?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+}
+
+const CORNERS = {
+  'top-right': { top: 54, right: 10, alignItems: 'flex-end' },
+  'top-left': { top: 54, left: 10, alignItems: 'flex-start' },
+  // Stacked upward from the corner: the list opens above the pill.
+  'bottom-right': { bottom: 40, right: 10, alignItems: 'flex-end', flexDirection: 'column-reverse' },
+  'bottom-left': { bottom: 40, left: 10, alignItems: 'flex-start', flexDirection: 'column-reverse' },
+} as const
+
+type Session = { tracker: MotionTracker; refs: number; stop: () => void }
+let session: Session | null = null
+
+/** One listening session per app, shared by every MotionScan mounted. Starts synchronously. */
+function acquire(): Session {
+  if (session) {
+    session.refs++
+    return session
+  }
+  const tracker = new MotionTracker()
+  let uninstall: (() => void) | null = null
+  if (!isInspectorInstalled()) {
+    const local = createInspector({ send: () => {} })
+    const removeHook = local.install()
+    const bridge = Platform.OS === 'web' ? null : uiThreadBridge({ report: local.report, overrides: {} })
+    uninstall = () => {
+      bridge?.dispose?.()
+      removeHook()
+    }
+  }
+  watchLayouts(true)
+  const untap = tapInspector((ev) => tracker.onEvent(ev, Date.now()))
+  session = {
+    tracker,
+    refs: 1,
+    stop: () => {
+      untap()
+      watchLayouts(false)
+      uninstall?.()
+    },
+  }
+  return session
+}
+
+function release(s: Session) {
+  s.refs--
+  if (s.refs > 0) return
+  s.stop()
+  if (session === s) session = null
+}
+
+const COLORS = { ok: '#4ade80', warn: '#fbbf24', bad: '#f43f5e' }
+const tone = (dropped: number) => (dropped === 0 ? COLORS.ok : dropped <= 3 ? COLORS.warn : COLORS.bad)
+const short = (file: string) => file.split('/').pop() ?? file
+
+export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel = true, debug = false, recorder, corner = 'top-right' }: MotionScanProps) {
+  // Started during the first render, before the children render, so nothing they do is missed.
+  const sessionRef = useRef<Session | null>(null)
+  if (enabled && !sessionRef.current) sessionRef.current = acquire()
+  useEffect(() => {
+    if (!enabled) return
+    if (!sessionRef.current) sessionRef.current = acquire()
+    const s = sessionRef.current
+    return () => {
+      release(s)
+      sessionRef.current = null
+    }
+  }, [enabled])
+
+  const [rates, setRates] = useState({ ui: 0, js: 0, dropped: 0 })
+  const [gaps, setGaps] = useState({ min: 0, max: 0 })
+  const [, setTick] = useState(0)
+  const [open, setOpen] = useState(false)
+  // Hidden while the inspector snapshots the screen for an export.
+  const [hidden, setHidden] = useState(isCapturing)
+  useEffect(() => watchCapturing(setHidden), [])
+
+  // ── Recorder ──
+  const [rec, setRec] = useState(isRecording)
+  const [recMs, setRecMs] = useState(0)
+  useEffect(() => {
+    if (recorder && typeof recorder === 'object') configureRecorder(recorder)
+  }, [recorder])
+  useEffect(() => watchRecording(setRec), [])
+  // Where the last recording went, shown under the button for a few seconds.
+  const [saved, setSaved] = useState<string | null>(null)
+  useEffect(
+    () =>
+      watchSaved((info) => {
+        setSaved(info.projectFile ? `Saved to ${info.projectFile}` : info.sentToPanel ? 'Sent to the inspector panel' : null)
+        setTimeout(() => setSaved(null), 5000)
+      }),
+    [],
+  )
+  useEffect(() => {
+    if (!rec) return
+    const id = setInterval(() => setRecMs(recordingElapsed()), 500)
+    return () => clearInterval(id)
+  }, [rec])
+  const totals = useRef({ dropped: 0 })
+
+  // ── UI thread frames ──
+  const uiFrames = useSharedValue(0)
+  const uiWindowStart = useSharedValue(0)
+  const uiMinDt = useSharedValue(1000)
+  const uiMaxDt = useSharedValue(0)
+  const uiLastTs = useSharedValue(0)
+  const uiFast = useSharedValue(0)
+  const uiMid = useSharedValue(0)
+  const uiInterval = useSharedValue(1000 / 60)
+  const onUiDrop = (uiTs: number, frames: number, dt: number) => {
+    // UI timestamps run on their own clock: line them up with JS time by the smallest lag seen.
+    const lag = Date.now() - uiTs
+    clock.current = Math.min(clock.current, lag)
+    totals.current.dropped += frames
+    sessionRef.current?.tracker.onDrop(uiTs + clock.current, frames, dt)
+  }
+  const clock = useRef(Number.POSITIVE_INFINITY)
+  const onUiRate = (fps: number, minDt: number, maxDt: number) => {
+    setRates((r) => (r.ui === fps && r.dropped === totals.current.dropped ? r : { ...r, ui: fps, dropped: totals.current.dropped }))
+    if (debug) setGaps({ min: Math.round(minDt * 10) / 10, max: Math.round(maxDt * 10) / 10 })
+  }
+  useFrameCallback((info) => {
+    'worklet'
+    // The gap since the last callback, measured from timestamps so a skipped callback shows as one long frame.
+    const last = uiLastTs.value
+    uiLastTs.value = info.timestamp
+    if (last === 0) return
+    const dt = info.timestamp - last
+    if (dt <= 0) return
+    if (dt < uiMinDt.value) uiMinDt.value = dt
+    if (dt > uiMaxDt.value) uiMaxDt.value = dt
+    if (dt < 10.5) uiFast.value += 1
+    else if (dt < 13) uiMid.value += 1
+    const lost = Math.max(0, Math.round(dt / uiInterval.value) - 1)
+    if (lost > 0) scheduleOnRN(onUiDrop, info.timestamp, lost, dt)
+    uiFrames.value += 1
+    if (uiWindowStart.value === 0) uiWindowStart.value = info.timestamp
+    const span = info.timestamp - uiWindowStart.value
+    if (span >= 500) {
+      // The refresh interval is what most frames of the last window took, snapped to 60/90/120 Hz.
+      const m = uiMinDt.value
+      const n = uiFrames.value
+      uiInterval.value = uiFast.value * 2 > n ? 1000 / 120 : (uiFast.value + uiMid.value) * 2 > n ? 1000 / 90 : 1000 / 60
+      uiFast.value = 0
+      uiMid.value = 0
+      scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value)
+      uiFrames.value = 0
+      uiWindowStart.value = info.timestamp
+      uiMinDt.value = 1000
+      uiMaxDt.value = 0
+    }
+  }, enabled)
+
+  // ── JS thread frames ──
+  useEffect(() => {
+    if (!enabled) return
+    let raf = 0
+    let last = 0
+    let frames = 0
+    let windowStart = 0
+    let recent: number[] = []
+    let interval = 1000 / 60
+    const loop = (ts: number) => {
+      if (last) {
+        const dt = ts - last
+        recent.push(dt)
+        const lost = droppedFrames(dt, interval)
+        if (lost > 0) {
+          totals.current.dropped += lost
+          sessionRef.current?.tracker.onDrop(Date.now(), lost, dt)
+        }
+      }
+      last = ts
+      frames++
+      if (!windowStart) windowStart = ts
+      if (ts - windowStart >= 500) {
+        interval = frameIntervalOf(recent)
+        const fps = Math.round((frames * 1000) / (ts - windowStart))
+        setRates((r) => (r.js === fps && r.dropped === totals.current.dropped ? r : { ...r, js: fps, dropped: totals.current.dropped }))
+        frames = 0
+        windowStart = ts
+        recent = []
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => cancelAnimationFrame(raf)
+  }, [enabled])
+
+  // Redraw the outlines a few times a second, and only while there is something to outline (or one just
+  // faded out): an idle scan commits nothing, so it costs the UI thread no frames of its own.
+  const drawn = useRef(0)
+  useEffect(() => {
+    if (!enabled) return
+    const id = setInterval(() => {
+      const n = sessionRef.current?.tracker.outlines(Date.now(), fadeMs).length ?? 0
+      if (n === 0 && drawn.current === 0) return
+      drawn.current = n
+      setTick((t) => t + 1)
+    }, 125)
+    return () => clearInterval(id)
+  }, [enabled, fadeMs])
+
+  // Touches reach the recorder from the root, before any child handles them. Bubbling props: they
+  // never take the responder from the app.
+  const touches = {
+    onTouchStart: (e: GestureResponderEvent) => recordTouches('start', e),
+    onTouchMove: (e: GestureResponderEvent) => recordTouches('move', e),
+    onTouchEnd: (e: GestureResponderEvent) => recordTouches('end', e),
+    onTouchCancel: (e: GestureResponderEvent) => recordTouches('cancel', e),
+  }
+  if (!enabled || hidden) return h(View, { ref: setCaptureRoot, style: styles.fill, pointerEvents: 'box-none', ...touches }, children)
+
+  const tracker = sessionRef.current?.tracker
+  const now = Date.now()
+  const layouts = getLayouts()
+  const outlines = tracker
+    ? tracker.outlines(now, fadeMs).flatMap((o) => {
+        const r = layouts.get(o.styleId)
+        if (!r) return []
+        const color = tone(o.dropped)
+        const opacity = o.live ? 1 : Math.max(0, 1 - o.age / fadeMs)
+        return [
+          h(View, {
+            key: o.styleId,
+            pointerEvents: 'none',
+            style: [styles.outline, { left: r.x, top: r.y, width: r.width, height: r.height, borderColor: color, opacity }],
+          },
+          o.dropped > 0 ? h(Text, { style: [styles.badge, { backgroundColor: color }] }, `${o.dropped}`) : null),
+        ]
+      })
+    : []
+
+  const worst = tracker?.worst(5) ?? []
+  const recClock = `${Math.floor(recMs / 60000)}:${String(Math.floor(recMs / 1000) % 60).padStart(2, '0')}`
+  const recButton = recorder
+    ? h(
+        Pressable,
+        {
+          onPress: () => {
+            if (isRecording()) void stopRecording()
+            else {
+              setRecMs(0)
+              startRecording()
+            }
+          },
+          accessibilityRole: 'button',
+          accessibilityLabel: rec ? 'Stop recording and share' : 'Record this session',
+          style: [styles.pill, styles.recPill, rec ? styles.recOn : null],
+        },
+        h(View, { style: rec ? styles.recSquare : styles.recDot }),
+        h(Text, { style: [styles.pillText, { color: rec ? '#fff' : '#fafafa' }] }, rec ? recClock : 'REC'),
+      )
+    : null
+  const savedNote = saved ? h(Text, { style: styles.saved, numberOfLines: 2 }, saved) : null
+  const panel = showPanel
+    ? h(
+        View,
+        { style: [styles.panelWrap, CORNERS[corner]], pointerEvents: 'box-none' },
+        savedNote,
+        h(View, { style: styles.pillRow, pointerEvents: 'box-none' }, recButton, h(
+          Pressable,
+          { onPress: () => setOpen((v) => !v), style: styles.pill },
+          h(Text, { style: [styles.pillText, { color: rates.ui && rates.ui < 50 ? COLORS.bad : COLORS.ok }] }, `UI ${rates.ui || '–'}`),
+          h(Text, { style: [styles.pillText, { color: rates.js && rates.js < 50 ? COLORS.bad : COLORS.ok }] }, `JS ${rates.js || '–'}`),
+          h(Text, { style: [styles.pillText, { color: rates.dropped ? COLORS.warn : '#a1a1aa' }] }, `${rates.dropped} dropped`),
+          debug ? h(Text, { style: [styles.pillText, { color: '#a1a1aa' }] }, `${gaps.min}–${gaps.max}ms`) : null,
+        )),
+        open
+          ? h(
+              View,
+              { style: styles.list },
+              worst.length
+                ? worst.map((s) =>
+                    h(
+                      View,
+                      { key: s.site.id, style: styles.row },
+                      h(Text, { style: styles.rowTitle, numberOfLines: 1 }, `${short(s.site.file)}:${s.site.line} · ${s.site.fn}`),
+                      h(Text, { style: [styles.rowMeta, { color: tone(s.dropped) }] }, `${s.dropped} dropped · ${Math.round(s.worstFrameMs)}ms worst · ${s.calls}×`),
+                    ),
+                  )
+                : h(Text, { style: styles.rowMeta }, 'No dropped frames while anything animated.'),
+            )
+          : null,
+      )
+    : null
+
+  return h(
+    View,
+    // The app's root: what a Skia capture draws.
+    { ref: setCaptureRoot, style: styles.fill, pointerEvents: 'box-none', ...touches },
+    children,
+    h(View, { style: styles.overlay, pointerEvents: 'box-none' }, ...outlines, panel ?? (recButton ? h(View, { style: [styles.panelWrap, CORNERS[corner]], pointerEvents: 'box-none' }, savedNote, recButton) : null)),
+  )
+}
+
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  overlay: { ...StyleSheet.absoluteFill, zIndex: 99999, elevation: 99999 },
+  outline: { position: 'absolute', borderWidth: 2, borderRadius: 4 },
+  badge: { position: 'absolute', top: -10, right: -10, minWidth: 20, paddingHorizontal: 4, borderRadius: 10, fontSize: 11, fontWeight: '700', color: '#111', textAlign: 'center', overflow: 'hidden' },
+  panelWrap: { position: 'absolute', gap: 6 },
+  pill: { flexDirection: 'row', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14, backgroundColor: 'rgba(17,17,20,0.88)' },
+  pillText: { fontSize: 11, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  pillRow: { flexDirection: 'row', gap: 6 },
+  recPill: { alignItems: 'center', gap: 6 },
+  recOn: { backgroundColor: 'rgba(225,29,72,0.92)' },
+  recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#f43f5e' },
+  saved: { maxWidth: 260, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, overflow: 'hidden', fontSize: 11, color: '#fafafa', backgroundColor: 'rgba(17,17,20,0.88)' },
+  recSquare: { width: 8, height: 8, borderRadius: 2, backgroundColor: '#fff' },
+  list: { width: 260, padding: 10, gap: 8, borderRadius: 12, backgroundColor: 'rgba(17,17,20,0.92)' },
+  row: { gap: 2 },
+  rowTitle: { color: '#fafafa', fontSize: 12, fontWeight: '600' },
+  rowMeta: { color: '#a1a1aa', fontSize: 11 },
+})

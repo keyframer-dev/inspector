@@ -1,0 +1,39 @@
+{
+  "type": "hello",
+  "role": "app",
+  "app": "Demo",
+  "platform": "macos",
+  "capture": true,
+  "screen": {
+    "width": 390,
+    "height": 844,
+    "scale": 3
+  },
+  "scenarios": [
+    "drag card"
+  ],
+  "protocol": 1,
+  "sdk": {
+    "name": "keyframer_inspector",
+    "version": "0.0.1"
+  },
+  "framework": "flutter",
+  "osVersion": "26.6.2",
+  "build": "debug",
+  "threads": {
+    "js": {
+      "label": "UI isolate",
+      "animates": true
+    },
+    "ui": {
+      "label": "Raster"
+    }
+  },
+  "capabilities": [
+    "playback",
+    "overrides",
+    "replay",
+    "scenarios",
+    "capture"
+  ]
+}

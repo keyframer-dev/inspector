@@ -1,0 +1,53 @@
+{
+  "type": "events",
+  "events": [
+    {
+      "kind": "anim",
+      "eid": 1,
+      "site": {
+        "id": "lib/main.dart:58:15",
+        "file": "lib/main.dart",
+        "line": 58,
+        "column": 15,
+        "fn": "animateTo",
+        "component": "Details",
+        "target": "bars",
+        "prop": null,
+        "params": [
+          {
+            "path": "1.duration",
+            "value": 900
+          }
+        ]
+      },
+      "at": 1700000000366,
+      "args": [
+        1.0,
+        {
+          "duration": 900,
+          "from": 0.0,
+          "curve": "easeOutBack"
+        }
+      ],
+      "thread": "js",
+      "t": 366,
+      "stack": "    at _DetailsState.initState (lib/main.dart:58:15)",
+      "frames": [
+        {
+          "methodName": "_DetailsState.initState",
+          "file": "lib/main.dart",
+          "lineNumber": 58,
+          "column": 15
+        },
+        {
+          "methodName": "StatefulElement._firstBuild",
+          "file": "package:flutter/src/widgets/framework.dart",
+          "lineNumber": 5602,
+          "column": 5,
+          "collapse": true
+        }
+      ],
+      "durationMs": 900
+    }
+  ]
+}

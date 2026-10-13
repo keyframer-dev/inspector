@@ -1,0 +1,16 @@
+{
+  "type": "events",
+  "events": [
+    {
+      "kind": "signal",
+      "site": {
+        "id": "lib/main.dart:31:5",
+        "file": "lib/main.dart",
+        "line": 31,
+        "column": 5,
+        "component": "HomeScreen",
+        "name": "cardX"
+      }
+    }
+  ]
+}

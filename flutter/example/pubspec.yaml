@@ -1,0 +1,21 @@
+name: keyframer_inspector_example
+description: An app with an entrance, a loop, a drag and a second screen, wired to the Keyframer inspector.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.3 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  keyframer_inspector:
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true

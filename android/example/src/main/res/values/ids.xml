@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ids name the views in the panel (an ObjectAnimator's target). -->
+    <item name="title" type="id" />
+    <item name="pulse" type="id" />
+    <item name="card" type="id" />
+    <item name="sheet" type="id" />
+</resources>

@@ -1,0 +1,6 @@
+{
+  "type": "scenarioDone",
+  "name": "missing",
+  "ms": 0,
+  "error": "No scenario named \"missing\". Registered: drag card."
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The relay is a local WebSocket (ws://10.0.2.2:8790 on the emulator). The app must also allow
+         cleartext to that host: see the example's network_security_config.xml. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

@@ -1,0 +1,9 @@
+{
+  "type": "events",
+  "events": [
+    {
+      "kind": "unsignal",
+      "id": "lib/main.dart:31:5"
+    }
+  ]
+}

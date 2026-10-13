@@ -1,0 +1,14 @@
+.DS_Store
+node_modules/
+# Swift
+.build/
+.swiftpm/
+xcuserdata/
+DerivedData/
+*.xcresult
+# Gradle
+.gradle/
+build/
+local.properties
+# Flutter
+.dart_tool/

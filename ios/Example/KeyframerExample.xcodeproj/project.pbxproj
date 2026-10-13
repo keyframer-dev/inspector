@@ -1,0 +1,306 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+		7792B67B5E4D4DEFCC7C64A2 /* KeyframerInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 93619460AD77576D4F86084C /* KeyframerInspector */; };
+		D799BAE6088A90139B415FCC = {isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = D0E2ABC3D80FE1067E8AD8ED; remoteInfo = KeyframerExample; };
+		FFC9B17DCDECF62F1E9FE02E = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KeyframerExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		196FDFFB572229EC6B839E92 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KeyframerExampleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CA58875195AA86D8BE963366 = {isa = PBXFileSystemSynchronizedRootGroup; path = KeyframerExample; sourceTree = "<group>"; };
+		022175867C27B99BC4123AE7 = {isa = PBXFileSystemSynchronizedRootGroup; path = KeyframerExampleUITests; sourceTree = "<group>"; };
+		DB8BF58B205897CD1F523426 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (7792B67B5E4D4DEFCC7C64A2,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CEAC53E8E08B3951EAB38666 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3041AE76937E007EAD4D4CC7 = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		330F5F564B87623CEB3A9B3B = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		28E30B7D232F9B4B78778CA2 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F569A742E667AF0B74D0D88F = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B28B7AF69320201D1CF206EB = {
+			isa = PBXGroup;
+			children = (
+				CA58875195AA86D8BE963366,
+				022175867C27B99BC4123AE7,
+				FBDC4F23F93125BBEEAE800C,
+			);
+			sourceTree = "<group>";
+		};
+		FBDC4F23F93125BBEEAE800C = {
+			isa = PBXGroup;
+			children = (
+				FFC9B17DCDECF62F1E9FE02E,
+				196FDFFB572229EC6B839E92,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		D0E2ABC3D80FE1067E8AD8ED /* KeyframerExample */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = FC5D7F5E8ED99501BF438497;
+			buildPhases = (
+				28E30B7D232F9B4B78778CA2,
+				DB8BF58B205897CD1F523426,
+				3041AE76937E007EAD4D4CC7,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				CA58875195AA86D8BE963366,
+			);
+			name = KeyframerExample;
+			packageProductDependencies = (
+				93619460AD77576D4F86084C,
+			);
+			productName = KeyframerExample;
+			productReference = FFC9B17DCDECF62F1E9FE02E;
+			productType = "com.apple.product-type.application";
+		};
+		C30B6F194BCA6E35465FBC54 /* KeyframerExampleUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EF55C457065A8D3872D85B6A;
+			buildPhases = (
+				F569A742E667AF0B74D0D88F,
+				CEAC53E8E08B3951EAB38666,
+				330F5F564B87623CEB3A9B3B,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DE58E2B17C19600779694943,
+			);
+			fileSystemSynchronizedGroups = (
+				022175867C27B99BC4123AE7,
+			);
+			name = KeyframerExampleUITests;
+			productName = KeyframerExampleUITests;
+			productReference = 196FDFFB572229EC6B839E92;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					D0E2ABC3D80FE1067E8AD8ED = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					C30B6F194BCA6E35465FBC54 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = D0E2ABC3D80FE1067E8AD8ED;
+					};
+				};
+			};
+			buildConfigurationList = 5636BA33F8A7B513012B9728;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B28B7AF69320201D1CF206EB;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B30F04C70E0A2BD2C6D51812 /* XCLocalSwiftPackageReference ".." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FBDC4F23F93125BBEEAE800C;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				D0E2ABC3D80FE1067E8AD8ED,
+				C30B6F194BCA6E35465FBC54,
+			);
+		};
+		DE58E2B17C19600779694943 = {isa = PBXTargetDependency; target = D0E2ABC3D80FE1067E8AD8ED; targetProxy = D799BAE6088A90139B415FCC; };
+		478E953DF5FF010AEF532A4A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = ("DEBUG=1", "$(inherited)", );
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		07145097E373ED17833ACECC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		3AE21744593A7AAD8CE5D809 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Keyframer UIKit";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the Keyframer inspector on your Mac.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.keyframer.inspector.example;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		CCD9F6C83836882348732D03 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Keyframer UIKit";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Connects to the Keyframer inspector on your Mac.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", );
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.keyframer.inspector.example;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		8A2EB7C875DFBA977AAC8A5E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.keyframer.inspector.example.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = KeyframerExample;
+			};
+			name = Debug;
+		};
+		37CA0BCE6A6834570E39FAD1 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.keyframer.inspector.example.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = KeyframerExample;
+			};
+			name = Release;
+		};
+		5636BA33F8A7B513012B9728 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				478E953DF5FF010AEF532A4A,
+				07145097E373ED17833ACECC,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		FC5D7F5E8ED99501BF438497 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3AE21744593A7AAD8CE5D809,
+				CCD9F6C83836882348732D03,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EF55C457065A8D3872D85B6A = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8A2EB7C875DFBA977AAC8A5E,
+				37CA0BCE6A6834570E39FAD1,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B30F04C70E0A2BD2C6D51812 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+		93619460AD77576D4F86084C /* KeyframerInspector */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KeyframerInspector;
+		};
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}
