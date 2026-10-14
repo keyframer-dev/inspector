@@ -5,6 +5,10 @@ why frames dropped, recorded on the device and scrubbed like a video. Tune a dur
 write the numbers back to your source. Hand the recording to a coding agent over MCP, or gate pull
 requests on it in CI.
 
+[![Keyframer Inspector: a dropped frame traced to its line, recorded, scrubbed, tuned and fixed](media/keyframer-inspector.gif)](media/keyframer-inspector.mp4)
+
+<sub>36 seconds. Click for the video with sound.</sub>
+
 This repository holds the SDKs that go into your app, for every platform, under MIT.
 
 | Platform | Folder | Install |
