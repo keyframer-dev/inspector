@@ -17,6 +17,7 @@ import type {
   InspectorStyleSite,
 } from '../../protocol/inspector'
 import { useEffect } from 'react'
+import { isScrollSample } from './scrollIds'
 
 type AnimFn = (...args: unknown[]) => unknown
 
@@ -235,8 +236,7 @@ export function __kfScrollJs<F>(id: string, fn: F): F {
   return wrapped as unknown as F
 }
 
-/** Recorded offsets are samples named `<scroll id>:x` and `<scroll id>:y`. */
-export const isScrollSample = (id: string) => id.startsWith('scroll:') && (id.endsWith(':x') || id.endsWith(':y'))
+export { isScrollSample }
 
 /**
  * Scrolls the lists these samples name to their offsets (other samples are ignored): playback,

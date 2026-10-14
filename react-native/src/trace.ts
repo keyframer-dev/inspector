@@ -26,7 +26,7 @@ import type {
   InspectorUiWork,
 } from '../../protocol/inspector'
 import { adviceFor, isReactNative } from './platforms'
-import { isScrollSample } from './runtime'
+import { isScrollSample } from './scrollIds'
 import { sampleAt } from './signals'
 
 /** An animation that started while recording. */
