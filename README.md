@@ -24,7 +24,7 @@ the panel inside Expo's dev tools, no desktop app needed.
 **React Native.** Add the Babel plugin in development (before `react-native-worklets/plugin`), connect,
 then press **shift+m** in Metro and open **@keyframerdev/inspector**. The
 [npm README](https://www.npmjs.com/package/@keyframerdev/inspector) has the details, bare React Native
-included.
+included, and [`react-native/example`](./react-native/example) is an Expo app with it all set up.
 
 ```js
 // babel.config.js (Expo)
