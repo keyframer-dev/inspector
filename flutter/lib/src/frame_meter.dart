@@ -76,9 +76,10 @@ class FrameMeter {
       stats.add(KfFrameStat(t: _round(t), thread: thread, fps: (_frames * 1000 / span).round(), dropped: _dropped));
       final n = _frames;
       // The refresh interval is what most frames of the window took, snapped to 60/90/120 Hz.
-      interval = _fast * 2 > n
-          ? 1000 / 120
-          : (_fast + _mid) * 2 > n
+      interval =
+          _fast * 2 > n
+              ? 1000 / 120
+              : (_fast + _mid) * 2 > n
               ? 1000 / 90
               : 1000 / 60;
       _frames = 0;

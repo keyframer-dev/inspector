@@ -41,7 +41,8 @@ class KfSignal {
   KfSignalSite? _site;
 
   /// The call site's own key, before instances are told apart.
-  String get baseKey => frame != null ? '${frame!.uri}:${frame!.line}:${frame!.column}' : 'value:${fallbackKey ?? 'unnamed'}';
+  String get baseKey =>
+      frame != null ? '${frame!.uri}:${frame!.line}:${frame!.column}' : 'value:${fallbackKey ?? 'unnamed'}';
 
   /// Built on first report, so the runtime's appPackage and root are known by then.
   KfSignalSite site(KfRuntime rt) => _site ??= _buildSite(rt);

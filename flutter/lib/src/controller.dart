@@ -34,88 +34,96 @@ class KfAnimationController extends AnimationController {
 
   @override
   TickerFuture forward({double? from}) => _kf.start(
-        'forward',
-        () => [upperBound, _cfg(duration, from)],
-        duration,
-        (d) => _withDuration(d, () => super.forward(from: from)),
-        runMs: (d) => _span(d ?? duration, from ?? value, upperBound),
-      );
+    'forward',
+    () => [upperBound, _cfg(duration, from)],
+    duration,
+    (d) => _withDuration(d, () => super.forward(from: from)),
+    runMs: (d) => _span(d ?? duration, from ?? value, upperBound),
+  );
 
   @override
   TickerFuture reverse({double? from}) => _kf.start(
-        'reverse',
-        () => [lowerBound, _cfg(reverseDuration ?? duration, from)],
-        reverseDuration ?? duration,
-        (d) => _withDuration(d, () => super.reverse(from: from), reverse: true),
-        runMs: (d) => _span(d ?? reverseDuration ?? duration, from ?? value, lowerBound),
-      );
+    'reverse',
+    () => [lowerBound, _cfg(reverseDuration ?? duration, from)],
+    reverseDuration ?? duration,
+    (d) => _withDuration(d, () => super.reverse(from: from), reverse: true),
+    runMs: (d) => _span(d ?? reverseDuration ?? duration, from ?? value, lowerBound),
+  );
 
   @override
   TickerFuture animateTo(double target, {Duration? duration, Curve curve = Curves.linear}) => _kf.start(
-        'animateTo',
-        () => [target, _cfg(duration ?? this.duration, null, curve)],
-        duration ?? this.duration,
-        (d) => super.animateTo(target, duration: d ?? duration, curve: curve),
-        runMs: (d) => d != null || duration != null ? _ms(d ?? duration) : _span(this.duration, value, target),
-      );
+    'animateTo',
+    () => [target, _cfg(duration ?? this.duration, null, curve)],
+    duration ?? this.duration,
+    (d) => super.animateTo(target, duration: d ?? duration, curve: curve),
+    runMs: (d) => d != null || duration != null ? _ms(d ?? duration) : _span(this.duration, value, target),
+  );
 
   @override
   TickerFuture animateBack(double target, {Duration? duration, Curve curve = Curves.linear}) => _kf.start(
-        'animateBack',
-        () => [target, _cfg(duration ?? reverseDuration ?? this.duration, null, curve)],
-        duration ?? reverseDuration ?? this.duration,
-        (d) => super.animateBack(target, duration: d ?? duration, curve: curve),
-        runMs: (d) => d != null || duration != null ? _ms(d ?? duration) : _span(reverseDuration ?? this.duration, value, target),
-      );
+    'animateBack',
+    () => [target, _cfg(duration ?? reverseDuration ?? this.duration, null, curve)],
+    duration ?? reverseDuration ?? this.duration,
+    (d) => super.animateBack(target, duration: d ?? duration, curve: curve),
+    runMs:
+        (d) =>
+            d != null || duration != null ? _ms(d ?? duration) : _span(reverseDuration ?? this.duration, value, target),
+  );
 
   @override
-  TickerFuture repeat({double? min, double? max, bool reverse = false, Duration? period}) => _kf.start(
-        'repeat',
-        () => [
-          {
-            'min': min ?? lowerBound,
-            'max': max ?? upperBound,
-            'reverse': reverse,
-            'period': _ms(period ?? duration),
-          }
-        ],
-        period ?? duration,
-        (d) => super.repeat(min: min, max: max, reverse: reverse, period: d ?? period),
-        loops: true,
-      );
+  TickerFuture repeat({double? min, double? max, bool reverse = false, Duration? period, int? count}) => _kf.start(
+    'repeat',
+    () => [
+      {
+        'min': min ?? lowerBound,
+        'max': max ?? upperBound,
+        'reverse': reverse,
+        'period': _ms(period ?? duration),
+        if (count != null) 'count': count,
+      },
+    ],
+    period ?? duration,
+    (d) => super.repeat(min: min, max: max, reverse: reverse, period: d ?? period, count: count),
+    loops: true,
+  );
 
   @override
-  TickerFuture fling({double velocity = 1.0, SpringDescription? springDescription, AnimationBehavior? animationBehavior}) {
+  TickerFuture fling({
+    double velocity = 1.0,
+    SpringDescription? springDescription,
+    AnimationBehavior? animationBehavior,
+  }) {
     // A spring passed in is tunable (`0.spring.stiffness`…): the panel's values replace it for this call.
     var spring = springDescription;
     return _kf.start(
       'fling',
       () => [
-        {'velocity': velocity, 'from': value, if (spring != null) 'spring': _spring(spring!)}
+        {'velocity': velocity, 'from': value, if (spring != null) 'spring': _spring(spring!)},
       ],
       null,
       (_) => super.fling(velocity: velocity, springDescription: spring, animationBehavior: animationBehavior),
-      params: springDescription == null
-          ? const []
-          : [
-              KfParam('0.spring.mass', springDescription.mass),
-              KfParam('0.spring.stiffness', springDescription.stiffness),
-              KfParam('0.spring.damping', springDescription.damping),
-            ],
+      params:
+          springDescription == null
+              ? const []
+              : [
+                KfParam('0.spring.mass', springDescription.mass),
+                KfParam('0.spring.stiffness', springDescription.stiffness),
+                KfParam('0.spring.damping', springDescription.damping),
+              ],
       onPatch: springDescription == null ? null : (patch) => spring = _patchSpring(springDescription, patch),
     );
   }
 
   @override
   TickerFuture animateWith(Simulation simulation) => _kf.start(
-        'animateWith',
-        () => [
-          {'simulation': simulation.toString(), 'from': value}
-        ],
-        null,
-        (_) => super.animateWith(simulation),
-        runMs: (_) => _settleMs(simulation),
-      );
+    'animateWith',
+    () => [
+      {'simulation': simulation.toString(), 'from': value},
+    ],
+    null,
+    (_) => super.animateWith(simulation),
+    runMs: (_) => _settleMs(simulation),
+  );
 
   @override
   void dispose() {
@@ -132,8 +140,11 @@ class KfAnimationController extends AnimationController {
     return d.inMicroseconds / 1000 * fraction;
   }
 
-  Map<String, Object?> _cfg(Duration? d, double? from, [Curve curve = Curves.linear]) =>
-      {'duration': _ms(d), 'from': from ?? value, 'curve': curveName(curve)};
+  Map<String, Object?> _cfg(Duration? d, double? from, [Curve curve = Curves.linear]) => {
+    'duration': _ms(d),
+    'from': from ?? value,
+    'curve': curveName(curve),
+  };
 
   // forward() and reverse() read the controller's duration when they start: an overridden one is set
   // for that call only.
@@ -362,7 +373,8 @@ class _KfStatusTracker {
     if (!rt.active) return;
     final s = signal.site(rt);
     final fn = status == AnimationStatus.forward ? 'forward' : 'reverse';
-    final d = status == AnimationStatus.reverse ? (controller.reverseDuration ?? controller.duration) : controller.duration;
+    final d =
+        status == AnimationStatus.reverse ? (controller.reverseDuration ?? controller.duration) : controller.duration;
     final range = controller.upperBound - controller.lowerBound;
     final to = status == AnimationStatus.forward ? controller.upperBound : controller.lowerBound;
     rt.reportAnim(

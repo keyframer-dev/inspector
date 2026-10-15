@@ -28,16 +28,16 @@ void main() {
   });
 
   KfInspectorClient makeClient(FakeAsync async, {KfHost? withHost}) => KfInspectorClient(
-        url: relayAppUrl(app: 'Demo', platform: 'ios'),
-        connector: connector.call,
-        app: 'Demo',
-        platform: 'ios',
-        osVersion: '18.6',
-        host: withHost ?? host,
-        runtime: rt,
-        now: () => async.elapsed.inMicroseconds / 1000,
-        wallClock: () => 1700000000000 + async.elapsed.inMilliseconds,
-      )..start();
+    url: relayAppUrl(app: 'Demo', platform: 'ios'),
+    connector: connector.call,
+    app: 'Demo',
+    platform: 'ios',
+    osVersion: '18.6',
+    host: withHost ?? host,
+    runtime: rt,
+    now: () => async.elapsed.inMicroseconds / 1000,
+    wallClock: () => 1700000000000 + async.elapsed.inMilliseconds,
+  )..start();
 
   test('joins the relay as the app, says hello, then sends the catalog', () {
     fakeAsync((async) {
@@ -56,7 +56,7 @@ void main() {
         'screen': {'width': 390, 'height': 844, 'scale': 3},
         'scenarios': <String>[],
         'protocol': 1,
-        'sdk': {'name': 'keyframer_inspector', 'version': '0.1.0'},
+        'sdk': {'name': 'keyframer_inspector', 'version': '0.1.1'},
         'framework': 'flutter',
         'osVersion': '18.6',
         'build': 'debug',
@@ -71,8 +71,15 @@ void main() {
         'events': [
           {
             'kind': 'signal',
-            'site': {'id': 'lib/main.dart:10:5', 'file': 'lib/main.dart', 'line': 10, 'column': 5, 'component': 'Card', 'name': 'cardX'},
-          }
+            'site': {
+              'id': 'lib/main.dart:10:5',
+              'file': 'lib/main.dart',
+              'line': 10,
+              'column': 5,
+              'component': 'Card',
+              'name': 'cardX',
+            },
+          },
         ],
       });
       client.dispose();
@@ -83,7 +90,11 @@ void main() {
     fakeAsync((async) {
       final client = makeClient(async);
       async.flushMicrotasks();
-      rt.reportAnim(site, [1.0, {'duration': 700, 'curve': () {}}, double.nan]);
+      rt.reportAnim(site, [
+        1.0,
+        {'duration': 700, 'curve': () {}},
+        double.nan,
+      ]);
       expect(connector.last.ofType('events'), isEmpty);
       async.elapse(const Duration(milliseconds: 100));
       final [event] = connector.last.events;
@@ -134,7 +145,11 @@ void main() {
       final client = makeClient(async);
       async.flushMicrotasks();
       final s = connector.last;
-      s.receive({'type': 'record', 'signalIds': ['*'], 'on': true});
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
       async.flushMicrotasks();
       expect(host.onFrame, isNotNull);
 
@@ -149,8 +164,7 @@ void main() {
 
       // Raster timings on the engine's clock (offset by 5 s), one slow frame among them.
       host.onTimings!([
-        for (var i = 1; i <= 20; i++)
-          KfTiming(rasterEnd: 5000 + i * 16.667, rasterMs: i == 10 ? 40 : 4, buildMs: 3),
+        for (var i = 1; i <= 20; i++) KfTiming(rasterEnd: 5000 + i * 16.667, rasterMs: i == 10 ? 40 : 4, buildMs: 3),
       ]);
 
       // A touch, timed by its own stamp.
@@ -180,7 +194,12 @@ void main() {
       ]);
       final markers = [for (final b in batches) ...((b['markers'] as List?) ?? const []).cast<Map>()];
       expect(markers.where((m) => m['kind'] == 'navigation').map((m) => m['route']), ['/', '/details']);
-      expect(markers.last, {'kind': 'navigation', 't': 403, 'route': '/details', 'params': {'id': 7}});
+      expect(markers.last, {
+        'kind': 'navigation',
+        't': 403,
+        'route': '/details',
+        'params': {'id': 7},
+      });
       // The second move came 4 ms after the first: dropped (one per 120 Hz frame).
       final touches = markers.where((m) => m['kind'] == 'touch').toList();
       expect(touches.map((m) => m['phase']), ['start', 'move', 'end']);
@@ -188,7 +207,11 @@ void main() {
       expect(touches.last['t'], 403);
 
       // Stopping detaches from the host.
-      s.receive({'type': 'record', 'signalIds': ['*'], 'on': false});
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': false,
+      });
       async.flushMicrotasks();
       expect(host.onFrame, isNull);
       expect(host.onTouch, isNull);
@@ -200,14 +223,23 @@ void main() {
     fakeAsync((async) {
       final client = makeClient(async);
       async.flushMicrotasks();
-      connector.last.receive({'type': 'record', 'signalIds': ['*'], 'on': true});
+      connector.last.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
       async.flushMicrotasks();
       async.elapse(const Duration(milliseconds: 250));
-      rt.reportAnim(site, [1.0], durationMs: 699.6, frames: parseStackTrace('''
+      rt.reportAnim(
+        site,
+        [1.0],
+        durationMs: 699.6,
+        frames: parseStackTrace('''
 #0      KfAnimationController.forward (package:keyframer_inspector/src/controller.dart:38:7)
 #1      _HomeScreenState.initState (package:demo/main.dart:42:15)
 #2      StatefulElement._firstBuild (package:flutter/src/widgets/framework.dart:5602:5)
-'''));
+'''),
+      );
       async.elapse(const Duration(milliseconds: 100));
       final event = connector.last.events.singleWhere((e) => e['kind'] == 'anim');
       expect(event['t'], 250);
@@ -232,7 +264,11 @@ void main() {
     fakeAsync((async) {
       final client = makeClient(async);
       async.flushMicrotasks();
-      connector.last.receive({'type': 'record', 'signalIds': ['*'], 'on': true});
+      connector.last.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
       async.flushMicrotasks();
       final late = TestValue('late', line: 99)..value = 3;
       rt.register(late.signal);
@@ -278,7 +314,11 @@ void main() {
         ],
         'routes': [
           {'t': 1000, 'route': '/'},
-          {'t': 1050, 'route': '/details', 'params': {'id': 7}},
+          {
+            't': 1050,
+            'route': '/details',
+            'params': {'id': 7},
+          },
         ],
       });
       async.flushMicrotasks();
@@ -336,14 +376,22 @@ void main() {
       final s = connector.last;
       expect(s.sent.first['scenarios'], ['drag card']);
       final off = rt.registerScenario('boom', () async => throw StateError('no card'));
-      expect(s.ofType('scenarios').last, {'type': 'scenarios', 'names': ['drag card', 'boom']});
+      expect(s.ofType('scenarios').last, {
+        'type': 'scenarios',
+        'names': ['drag card', 'boom'],
+      });
       s.receive({'type': 'scenario', 'name': 'drag card'});
       s.receive({'type': 'scenario', 'name': 'boom'});
       s.receive({'type': 'scenario', 'name': 'nope'});
       async.elapse(const Duration(milliseconds: 300));
       expect(s.ofType('scenarioDone'), [
         {'type': 'scenarioDone', 'name': 'boom', 'ms': 0, 'error': 'Bad state: no card'},
-        {'type': 'scenarioDone', 'name': 'nope', 'ms': 0, 'error': 'No scenario named "nope". Registered: drag card, boom.'},
+        {
+          'type': 'scenarioDone',
+          'name': 'nope',
+          'ms': 0,
+          'error': 'No scenario named "nope". Registered: drag card, boom.',
+        },
         {'type': 'scenarioDone', 'name': 'drag card', 'ms': 300},
       ]);
       off();
@@ -410,7 +458,11 @@ void main() {
       expect(connector.last.sent.first['capture'], false);
       expect(connector.last.sent.first['capabilities'], ['playback', 'overrides', 'replay', 'scenarios']);
       expect(connector.last.sent.first.containsKey('osVersion'), isFalse);
-      connector.last.receive({'type': 'record', 'signalIds': ['lib/main.dart:10:5'], 'on': true});
+      connector.last.receive({
+        'type': 'record',
+        'signalIds': ['lib/main.dart:10:5'],
+        'on': true,
+      });
       async.elapse(const Duration(milliseconds: 100));
       final samples = [for (final b in connector.last.ofType('samples')) ...(b['samples'] as List)];
       expect(samples, hasLength(6));
@@ -428,7 +480,11 @@ void main() {
       final client = makeClient(async);
       async.flushMicrotasks();
       final s = connector.last;
-      s.receive({'type': 'record', 'signalIds': ['lib/main.dart:10:5'], 'on': true});
+      s.receive({
+        'type': 'record',
+        'signalIds': ['lib/main.dart:10:5'],
+        'on': true,
+      });
       rt.unregister(a.signal);
       async.elapse(const Duration(milliseconds: 100));
       expect(s.events.last, {'kind': 'unsignal', 'id': 'lib/main.dart:10:5'});
@@ -469,7 +525,11 @@ void main() {
       expect(a.began, 1);
       expect(a.ended, 0);
       expect(client.playing, isTrue);
-      s.receive({'type': 'record', 'signalIds': ['*'], 'on': true});
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
       async.flushMicrotasks();
       expect(a.ended, 1);
       expect(client.playing, isFalse);
@@ -486,9 +546,12 @@ void main() {
     expect(m.stats.first.toJson(), {'t': 250, 'thread': 'js', 'fps': 60, 'dropped': 0});
     expect(m.drops, isEmpty);
     m.tick(t += 50);
-    expect([for (final d in m.drops) d.toJson()], [
-      {'t': 550, 'thread': 'js', 'ms': 50.0, 'dropped': 2},
-    ]);
+    expect(
+      [for (final d in m.drops) d.toJson()],
+      [
+        {'t': 550, 'thread': 'js', 'ms': 50.0, 'dropped': 2},
+      ],
+    );
     // 120 Hz is learned from most frames, not from one short gap.
     final fast = FrameMeter('ui');
     for (var i = 0; i <= 40; i++) {

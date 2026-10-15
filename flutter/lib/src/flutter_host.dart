@@ -62,13 +62,13 @@ class FlutterKfHost implements KfHost {
   @override
   void Function() timings(void Function(List<KfTiming>) onTimings) {
     void cb(List<ui.FrameTiming> list) => onTimings([
-          for (final t in list)
-            KfTiming(
-              rasterEnd: t.timestampInMicroseconds(ui.FramePhase.rasterFinish) / 1000,
-              rasterMs: t.rasterDuration.inMicroseconds / 1000,
-              buildMs: t.buildDuration.inMicroseconds / 1000,
-            ),
-        ]);
+      for (final t in list)
+        KfTiming(
+          rasterEnd: t.timestampInMicroseconds(ui.FramePhase.rasterFinish) / 1000,
+          rasterMs: t.rasterDuration.inMicroseconds / 1000,
+          buildMs: t.buildDuration.inMicroseconds / 1000,
+        ),
+    ]);
     SchedulerBinding.instance.addTimingsCallback(cb);
     return () => SchedulerBinding.instance.removeTimingsCallback(cb);
   }

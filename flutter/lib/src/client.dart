@@ -81,9 +81,9 @@ class KfInspectorClient implements KfSink {
     this.pingInterval = const Duration(seconds: 10),
     double Function()? now,
     int Function()? wallClock,
-  })  : runtime = runtime ?? KfRuntime.instance,
-        _now = now ?? _stopwatchNow(),
-        _wall = wallClock ?? (() => DateTime.now().millisecondsSinceEpoch);
+  }) : runtime = runtime ?? KfRuntime.instance,
+       _now = now ?? _stopwatchNow(),
+       _wall = wallClock ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final Uri url;
   final KfConnector connector;
@@ -148,16 +148,18 @@ class KfInspectorClient implements KfSink {
     final recording = this.recording;
     // Stacks only while recording, as client.ts does: what a frame drop is traced back to.
     final withStack = recording && frames != null && frames.isNotEmpty;
-    _enqueue(KfEvent.anim(
-      eid: _nextEid++,
-      site: site,
-      at: _wall(),
-      args: sanitizeArgs(args),
-      t: recording ? _elapsed.round() : null,
-      stack: withStack ? _nonEmpty(formatStack(frames, appPackage: runtime.appPackage, root: runtime.root)) : null,
-      frames: withStack ? inspectorFrames(frames, appPackage: runtime.appPackage, root: runtime.root) : null,
-      durationMs: durationMs == null || !durationMs.isFinite ? null : durationMs.round(),
-    ));
+    _enqueue(
+      KfEvent.anim(
+        eid: _nextEid++,
+        site: site,
+        at: _wall(),
+        args: sanitizeArgs(args),
+        t: recording ? _elapsed.round() : null,
+        stack: withStack ? _nonEmpty(formatStack(frames, appPackage: runtime.appPackage, root: runtime.root)) : null,
+        frames: withStack ? inspectorFrames(frames, appPackage: runtime.appPackage, root: runtime.root) : null,
+        durationMs: durationMs == null || !durationMs.isFinite ? null : durationMs.round(),
+      ),
+    );
   }
 
   @override
@@ -210,9 +212,10 @@ class KfInspectorClient implements KfSink {
   /// How the app was built (debug frames are slower, so the inspector scales its thresholds):
   /// Flutter's kDebugMode / kProfileMode, from the same compile-time flags, so this file stays free
   /// of package:flutter.
-  static const String kfBuild = bool.fromEnvironment('dart.vm.product')
-      ? 'release'
-      : bool.fromEnvironment('dart.vm.profile')
+  static const String kfBuild =
+      bool.fromEnvironment('dart.vm.product')
+          ? 'release'
+          : bool.fromEnvironment('dart.vm.profile')
           ? 'profile'
           : 'debug';
 
@@ -290,7 +293,10 @@ class KfInspectorClient implements KfSink {
         final ids = (msg['signalIds'] as List?)?.whereType<String>().toList() ?? const [];
         setRecording(ids, msg['on'] == true);
       case 'playback':
-        playback(_samplesOf(msg['samples']), ((msg['routes'] as List?) ?? const []).map(KfRoute.fromJson).whereType<KfRoute>().toList());
+        playback(
+          _samplesOf(msg['samples']),
+          ((msg['routes'] as List?) ?? const []).map(KfRoute.fromJson).whereType<KfRoute>().toList(),
+        );
       case 'capture':
         _capture(msg);
       case 'scenario':
@@ -380,7 +386,9 @@ class KfInspectorClient implements KfSink {
       // The screen it starts on, then every screen change.
       final start = runtime.currentRoute;
       if (start != null) _marker(KfMarker.navigation(t: _elapsed.round(), route: start.route, params: start.params));
-      _stopNav = runtime.tapNavigation((r) => _marker(KfMarker.navigation(t: _elapsed.round(), route: r.route, params: r.params)));
+      _stopNav = runtime.tapNavigation(
+        (r) => _marker(KfMarker.navigation(t: _elapsed.round(), route: r.route, params: r.params)),
+      );
     } else {
       for (final stop in [_stopFrames, _stopTimings, _stopTouches, _stopNav]) {
         stop?.call();
@@ -599,11 +607,13 @@ class KfInspectorClient implements KfSink {
     final t0 = _now();
     if (run == null) {
       final names = runtime.scenarioNames;
-      _send(KfAppMessage.scenarioDone(
-        name: name,
-        ms: 0,
-        error: 'No scenario named "$name". Registered: ${names.isEmpty ? 'none' : names.join(', ')}.',
-      ));
+      _send(
+        KfAppMessage.scenarioDone(
+          name: name,
+          ms: 0,
+          error: 'No scenario named "$name". Registered: ${names.isEmpty ? 'none' : names.join(', ')}.',
+        ),
+      );
       return;
     }
     String? error;

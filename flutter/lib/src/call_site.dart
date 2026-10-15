@@ -117,7 +117,12 @@ String formatStack(List<KfStackFrame> frames, {String? appPackage, String? root,
 
 /// A stack as `InspectorStackFrame`s, mapped to source already: the inspector's own frames dropped,
 /// the SDK's and Flutter's marked `collapse` (library frames, as Metro marks node_modules).
-List<Map<String, Object?>> inspectorFrames(List<KfStackFrame> frames, {String? appPackage, String? root, int max = 16}) {
+List<Map<String, Object?>> inspectorFrames(
+  List<KfStackFrame> frames, {
+  String? appPackage,
+  String? root,
+  int max = 16,
+}) {
   final out = <Map<String, Object?>>[];
   for (final f in frames) {
     if (f.uri.startsWith('package:keyframer_inspector/') || f.uri.contains('/packages/keyframer_inspector/')) continue;

@@ -10,7 +10,7 @@ const String kfRasterThread = 'ui';
 /// The protocol version this SDK speaks, and the SDK itself (keep in step with pubspec.yaml).
 const int kfProtocolVersion = 1;
 const String kfSdkName = 'keyframer_inspector';
-const String kfSdkVersion = '0.1.0';
+const String kfSdkVersion = '0.1.1';
 
 /// What the two threads are called here (`InspectorThreads`): animations tick on the UI isolate.
 const Map<String, Object?> kfThreads = {
@@ -58,21 +58,28 @@ class KfCallSite {
   final List<KfParam> params;
 
   Map<String, Object?> toJson() => {
-        'id': id,
-        'file': file,
-        'line': line,
-        'column': column,
-        'fn': fn,
-        'component': component,
-        'target': target,
-        'prop': prop,
-        'params': [for (final p in params) p.toJson()],
-      };
+    'id': id,
+    'file': file,
+    'line': line,
+    'column': column,
+    'fn': fn,
+    'component': component,
+    'target': target,
+    'prop': prop,
+    'params': [for (final p in params) p.toJson()],
+  };
 }
 
 /// One animated value (`InspectorSignalSite`): what recording samples and playback writes.
 class KfSignalSite {
-  const KfSignalSite({required this.id, required this.file, required this.line, this.column, this.component, this.name});
+  const KfSignalSite({
+    required this.id,
+    required this.file,
+    required this.line,
+    this.column,
+    this.component,
+    this.name,
+  });
 
   final String id;
   final String file;
@@ -84,13 +91,13 @@ class KfSignalSite {
   final String? name;
 
   Map<String, Object?> toJson() => {
-        'id': id,
-        'file': file,
-        'line': line,
-        if (column != null) 'column': column,
-        'component': component,
-        'name': name,
-      };
+    'id': id,
+    'file': file,
+    'line': line,
+    if (column != null) 'column': column,
+    'component': component,
+    'name': name,
+  };
 }
 
 /// A value sampled while recording (`InspectorSample`). `t` is ms on the recording's clock.
@@ -164,14 +171,20 @@ abstract final class KfMarker {
     required num x,
     required num y,
     bool lost = false,
-  }) =>
-      {'kind': 'touch', 't': t, 'phase': phase, 'id': id, 'x': x, 'y': y, if (lost) 'lost': true};
+  }) => {'kind': 'touch', 't': t, 'phase': phase, 'id': id, 'x': x, 'y': y, if (lost) 'lost': true};
 
-  static Map<String, Object?> navigation({required num t, required String route, Map<String, Object?>? params}) =>
-      {'kind': 'navigation', 't': t, 'route': route, if (params != null) 'params': params};
+  static Map<String, Object?> navigation({required num t, required String route, Map<String, Object?>? params}) => {
+    'kind': 'navigation',
+    't': t,
+    'route': route,
+    if (params != null) 'params': params,
+  };
 
-  static Map<String, Object?> appState({required num t, required String state}) =>
-      {'kind': 'appState', 't': t, 'state': state};
+  static Map<String, Object?> appState({required num t, required String state}) => {
+    'kind': 'appState',
+    't': t,
+    'state': state,
+  };
 
   static Map<String, Object?> note({required num t, required String text}) => {'kind': 'note', 't': t, 'text': text};
 }
@@ -188,19 +201,18 @@ abstract final class KfEvent {
     String? stack,
     List<Map<String, Object?>>? frames,
     num? durationMs,
-  }) =>
-      {
-        'kind': 'anim',
-        'eid': eid,
-        'site': site.toJson(),
-        'at': at,
-        'args': args,
-        'thread': thread,
-        if (t != null) 't': t,
-        if (stack != null) 'stack': stack,
-        if (frames != null) 'frames': frames,
-        if (durationMs != null) 'durationMs': durationMs,
-      };
+  }) => {
+    'kind': 'anim',
+    'eid': eid,
+    'site': site.toJson(),
+    'at': at,
+    'args': args,
+    'thread': thread,
+    if (t != null) 't': t,
+    if (stack != null) 'stack': stack,
+    if (frames != null) 'frames': frames,
+    if (durationMs != null) 'durationMs': durationMs,
+  };
 
   static Map<String, Object?> signal(KfSignalSite site) => {'kind': 'signal', 'site': site.toJson()};
 
@@ -231,24 +243,23 @@ abstract final class KfAppMessage {
     required List<String> scenarios,
     required List<String> capabilities,
     String? root,
-  }) =>
-      {
-        'type': 'hello',
-        'role': 'app',
-        'app': app,
-        'platform': platform,
-        'capture': capture,
-        if (screen != null) 'screen': screen.toJson(),
-        'scenarios': scenarios,
-        'protocol': kfProtocolVersion,
-        'sdk': {'name': kfSdkName, 'version': kfSdkVersion},
-        'framework': 'flutter',
-        if (osVersion != null) 'osVersion': osVersion,
-        if (build != null) 'build': build,
-        'threads': kfThreads,
-        'capabilities': capabilities,
-        if (root != null && root.isNotEmpty) 'root': root,
-      };
+  }) => {
+    'type': 'hello',
+    'role': 'app',
+    'app': app,
+    'platform': platform,
+    'capture': capture,
+    if (screen != null) 'screen': screen.toJson(),
+    'scenarios': scenarios,
+    'protocol': kfProtocolVersion,
+    'sdk': {'name': kfSdkName, 'version': kfSdkVersion},
+    'framework': 'flutter',
+    if (osVersion != null) 'osVersion': osVersion,
+    if (build != null) 'build': build,
+    'threads': kfThreads,
+    'capabilities': capabilities,
+    if (root != null && root.isNotEmpty) 'root': root,
+  };
 
   static Map<String, Object?> events(List<Map<String, Object?>> events) => {'type': 'events', 'events': events};
 
@@ -257,21 +268,29 @@ abstract final class KfAppMessage {
     List<KfFrameStat> frames = const [],
     List<KfFrameDrop> drops = const [],
     List<Map<String, Object?>> markers = const [],
-  }) =>
-      {
-        'type': 'samples',
-        'samples': [for (final s in samples) s.toJson()],
-        if (frames.isNotEmpty) 'frames': [for (final f in frames) f.toJson()],
-        if (drops.isNotEmpty) 'drops': [for (final d in drops) d.toJson()],
-        if (markers.isNotEmpty) 'markers': markers,
-      };
+  }) => {
+    'type': 'samples',
+    'samples': [for (final s in samples) s.toJson()],
+    if (frames.isNotEmpty) 'frames': [for (final f in frames) f.toJson()],
+    if (drops.isNotEmpty) 'drops': [for (final d in drops) d.toJson()],
+    if (markers.isNotEmpty) 'markers': markers,
+  };
 
   static Map<String, Object?> scenarios(List<String> names) => {'type': 'scenarios', 'names': names};
 
-  static Map<String, Object?> scenarioDone({required String name, required int ms, String? error}) =>
-      {'type': 'scenarioDone', 'name': name, 'ms': ms, if (error != null) 'error': error};
+  static Map<String, Object?> scenarioDone({required String name, required int ms, String? error}) => {
+    'type': 'scenarioDone',
+    'name': name,
+    'ms': ms,
+    if (error != null) 'error': error,
+  };
 
   /// `format` says what `data` is, which may differ from what was asked (Flutter encodes PNG only).
-  static Map<String, Object?> frame({required String id, String? data, String? format, String? error}) =>
-      {'type': 'frame', 'id': id, if (data != null) 'data': data, if (format != null) 'format': format, if (error != null) 'error': error};
+  static Map<String, Object?> frame({required String id, String? data, String? format, String? error}) => {
+    'type': 'frame',
+    'id': id,
+    if (data != null) 'data': data,
+    if (format != null) 'format': format,
+    if (error != null) 'error': error,
+  };
 }

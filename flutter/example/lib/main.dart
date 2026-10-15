@@ -8,11 +8,9 @@ import 'package:flutter/physics.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
 
 void main() {
-  runApp(const KeyframerInspector(
-    app: 'Flutter example',
-    appPackage: 'keyframer_inspector_example',
-    child: ExampleApp(),
-  ));
+  runApp(
+    const KeyframerInspector(app: 'Flutter example', appPackage: 'keyframer_inspector_example', child: ExampleApp()),
+  );
 }
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -27,10 +25,7 @@ class ExampleApp extends StatelessWidget {
       navigatorKey: navigatorKey,
       navigatorObservers: [kfNavigatorObserver],
       theme: ThemeData(colorSchemeSeed: const Color(0xFF6E56CF), useMaterial3: true),
-      routes: {
-        '/': (_) => const HomeScreen(),
-        '/details': (_) => const DetailsScreen(),
-      },
+      routes: {'/': (_) => const HomeScreen(), '/details': (_) => const DetailsScreen()},
     );
   }
 }
@@ -44,7 +39,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   // The entrance: the header slides up and fades in once.
-  late final _entrance = KfAnimationController(vsync: this, duration: const Duration(milliseconds: 700), name: 'entrance');
+  late final _entrance = KfAnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 700),
+    name: 'entrance',
+  );
   // The loop: a dot that breathes forever.
   late final _pulse = KfAnimationController(vsync: this, duration: const Duration(milliseconds: 1200), name: 'pulse');
   // The gesture: a card dragged sideways (-1 to 1) that springs back when let go.
@@ -60,12 +59,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _unregister
       ..add(registerReplay(() => _entrance.forward(from: 0)))
       ..add(registerScenario('drag card', _dragScenario))
-      ..add(registerScenario('open details', () async {
-        unawaited(navigatorKey.currentState!.pushNamed('/details', arguments: {'id': 7}));
-        await Future<void>.delayed(const Duration(milliseconds: 1400));
-        navigatorKey.currentState!.pop();
-        await Future<void>.delayed(const Duration(milliseconds: 500));
-      }));
+      ..add(
+        registerScenario('open details', () async {
+          unawaited(navigatorKey.currentState!.pushNamed('/details', arguments: {'id': 7}));
+          await Future<void>.delayed(const Duration(milliseconds: 1400));
+          navigatorKey.currentState!.pop();
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }),
+      );
   }
 
   @override
@@ -119,38 +120,43 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         children: [
           AnimatedBuilder(
             animation: entrance,
-            builder: (context, child) => Opacity(
-              opacity: entrance.value,
-              child: Transform.translate(offset: Offset(0, 40 * (1 - entrance.value)), child: child),
-            ),
+            builder:
+                (context, child) => Opacity(
+                  opacity: entrance.value,
+                  child: Transform.translate(offset: Offset(0, 40 * (1 - entrance.value)), child: child),
+                ),
             child: Text('Recorded, traced, replayed.', style: Theme.of(context).textTheme.headlineSmall),
           ),
           const SizedBox(height: 32),
-          Row(children: [
-            AnimatedBuilder(
-              animation: _pulse,
-              builder: (context, _) => Container(
-                width: 28 + 20 * _pulse.value,
-                height: 28 + 20 * _pulse.value,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: Color.lerp(const Color(0xFF6E56CF), const Color(0xFFE5484D), _pulse.value),
-                ),
+          Row(
+            children: [
+              AnimatedBuilder(
+                animation: _pulse,
+                builder:
+                    (context, _) => Container(
+                      width: 28 + 20 * _pulse.value,
+                      height: 28 + 20 * _pulse.value,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color.lerp(const Color(0xFF6E56CF), const Color(0xFFE5484D), _pulse.value),
+                      ),
+                    ),
               ),
-            ),
-            const SizedBox(width: 16),
-            const Text('A loop'),
-          ]),
+              const SizedBox(width: 16),
+              const Text('A loop'),
+            ],
+          ),
           const SizedBox(height: 32),
           GestureDetector(
             onHorizontalDragUpdate: _onDragUpdate,
             onHorizontalDragEnd: _onDragEnd,
             child: AnimatedBuilder(
               animation: _drag,
-              builder: (context, child) => Transform.translate(
-                offset: Offset(_drag.value * _halfWidth * 0.8, 0),
-                child: Transform.rotate(angle: _drag.value * 0.25, child: child),
-              ),
+              builder:
+                  (context, child) => Transform.translate(
+                    offset: Offset(_drag.value * _halfWidth * 0.8, 0),
+                    child: Transform.rotate(angle: _drag.value * 0.25, child: child),
+                  ),
               child: Card(
                 key: _cardKey,
                 child: const SizedBox(height: 120, child: Center(child: Text('Drag me sideways'))),
@@ -199,22 +205,23 @@ class _DetailsScreenState extends State<DetailsScreen> with SingleTickerProvider
         padding: const EdgeInsets.all(24),
         child: AnimatedBuilder(
           animation: _bars,
-          builder: (context, _) => Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              for (final h in heights)
-                Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 6),
-                    height: 220 * h * _bars.value.clamp(0.0, 1.2),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primary,
-                      borderRadius: BorderRadius.circular(8),
+          builder:
+              (context, _) => Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  for (final h in heights)
+                    Expanded(
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 6),
+                        height: 220 * h * _bars.value.clamp(0.0, 1.2),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.primary,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-            ],
-          ),
+                ],
+              ),
         ),
       ),
     );

@@ -31,7 +31,9 @@ class FakeSocket implements KfSocket {
 
   List<Map<String, Object?>> ofType(String type) => sent.where((m) => m['type'] == type).toList();
 
-  List<Map<String, Object?>> get events => [for (final m in ofType('events')) ...(m['events'] as List).cast<Map<String, Object?>>()];
+  List<Map<String, Object?>> get events => [
+    for (final m in ofType('events')) ...(m['events'] as List).cast<Map<String, Object?>>(),
+  ];
 }
 
 class FakeConnector {
@@ -94,7 +96,12 @@ class FakeHost implements KfHost {
 
 /// A signal backed by a plain variable, with playback hooks counted.
 class TestValue {
-  TestValue(String name, {String uri = 'package:demo/main.dart', int line = 10, String member = '_CardState.initState'}) {
+  TestValue(
+    String name, {
+    String uri = 'package:demo/main.dart',
+    int line = 10,
+    String member = '_CardState.initState',
+  }) {
     signal = KfSignal(
       read: () => value,
       write: (v) {

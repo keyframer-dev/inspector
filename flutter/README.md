@@ -11,10 +11,12 @@ Status: a working vertical slice. Debug builds are verified end to end on macOS 
 
 ## Quick start
 
+Flutter 3.29 or later.
+
 ```yaml
 # pubspec.yaml
 dependencies:
-  keyframer_inspector: ^0.1.0
+  keyframer_inspector: ^0.1.1
 ```
 
 ```dart
@@ -150,4 +152,4 @@ flutter test          # 43 tests
 Implicit animations (`AnimatedContainer`, `TweenAnimationBuilder`) and `Hero` are not seen; build and
 layout cost per widget (the `commits` / `tasks` equivalents) is not reported; recordings made on the
 device (`recording` message) are not built; Flutter web needs a non-dart:io transport; profile builds are
-not yet verified on a device (this machine's Flutter 3.16 cannot build macOS profile with Xcode 27).
+not yet verified on a device.

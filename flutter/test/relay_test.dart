@@ -31,7 +31,7 @@ class Editor {
 
   /// Waits until a received message matches.
   Future<Map<String, Object?>> next(bool Function(Map<String, Object?>) test) async {
-    for (var seen = 0;;) {
+    for (var seen = 0; ;) {
       for (; seen < received.length; seen++) {
         if (test(received[seen])) return received[seen];
       }
@@ -68,7 +68,11 @@ void main() {
     final catalog = await editor.next((m) => m['type'] == 'events');
     expect((catalog['events'] as List).single, containsPair('kind', 'signal'));
 
-    editor.send({'type': 'record', 'signalIds': ['*'], 'on': true});
+    editor.send({
+      'type': 'record',
+      'signalIds': ['*'],
+      'on': true,
+    });
     await Future<void>.delayed(const Duration(milliseconds: 100));
     for (var i = 0; i < 5; i++) {
       card.value = i.toDouble();

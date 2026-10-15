@@ -133,5 +133,7 @@ Future<void> main(List<String> args) async {
   final i = args.indexOf('--port');
   final port = i >= 0 && i + 1 < args.length ? int.parse(args[i + 1]) : 8790;
   final relay = await KfRelay.start(port: port, lan: args.contains('--lan'), verbose: args.contains('--verbose'));
-  stdout.writeln('[relay] listening on ws://${args.contains('--lan') ? '0.0.0.0' : '127.0.0.1'}:${relay.port} (/app, /editor)');
+  stdout.writeln(
+    '[relay] listening on ws://${args.contains('--lan') ? '0.0.0.0' : '127.0.0.1'}:${relay.port} (/app, /editor)',
+  );
 }

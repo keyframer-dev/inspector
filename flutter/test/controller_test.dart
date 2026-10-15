@@ -85,12 +85,31 @@ void main() {
   });
   tearDown(rt.reset);
 
-  testWidgets('a controller is a signal located where it was created, and forward is an anim at its call', (tester) async {
+  testWidgets('a controller is a signal located where it was created, and forward is an anim at its call', (
+    tester,
+  ) async {
     await tester.pumpWidget(const Demo());
-    expect([for (final s in sink.signals) s.toJson()], [
-      {'id': entranceSite, 'file': 'test/controller_test.dart', 'line': lineOf(entranceSite), 'column': columnOf(entranceSite), 'component': 'Demo', 'name': 'entrance'},
-      {'id': loopSite, 'file': 'test/controller_test.dart', 'line': lineOf(loopSite), 'column': columnOf(loopSite), 'component': 'Demo', 'name': 'loop'},
-    ]);
+    expect(
+      [for (final s in sink.signals) s.toJson()],
+      [
+        {
+          'id': entranceSite,
+          'file': 'test/controller_test.dart',
+          'line': lineOf(entranceSite),
+          'column': columnOf(entranceSite),
+          'component': 'Demo',
+          'name': 'entrance',
+        },
+        {
+          'id': loopSite,
+          'file': 'test/controller_test.dart',
+          'line': lineOf(loopSite),
+          'column': columnOf(loopSite),
+          'component': 'Demo',
+          'name': 'loop',
+        },
+      ],
+    );
     final (site, args) = sink.anims.single;
     expect(site.toJson(), {
       'id': forwardSite,
@@ -151,6 +170,22 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('repeat with a count reports it and still stops after that many loops', (tester) async {
+    late DemoState s;
+    await tester.pumpWidget(Demo(onReady: (d) => s = d));
+    sink.anims.clear();
+    s.loop.repeat(count: 2);
+    expect(sink.anims.single.$2, [
+      {'min': 0.0, 'max': 1.0, 'reverse': false, 'period': 1000, 'count': 2},
+    ]);
+    await tester.pump(); // the clock starts on the first frame
+    await tester.pump(const Duration(milliseconds: 1500));
+    expect(s.loop.isAnimating, isTrue);
+    await tester.pump(const Duration(milliseconds: 600));
+    expect(s.loop.isAnimating, isFalse);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('a duration override applies the next time that call runs, for that call only', (tester) async {
     rt.overrides = {
       forwardSite: {'1.duration': 100},
@@ -173,7 +208,11 @@ void main() {
     void fling() => s.loop.fling(velocity: 1, springDescription: spring);
     fling();
     final site = sink.anims.single.$1;
-    expect(site.params.map((p) => '${p.path}=${p.value}'), ['0.spring.mass=1.0', '0.spring.stiffness=180.0', '0.spring.damping=30.0']);
+    expect(site.params.map((p) => '${p.path}=${p.value}'), [
+      '0.spring.mass=1.0',
+      '0.spring.stiffness=180.0',
+      '0.spring.damping=30.0',
+    ]);
     s.loop.stop();
     rt.overrides = {
       site.id: {'0.spring.stiffness': 200},
@@ -240,7 +279,10 @@ void main() {
   });
 
   testWidgets('kfTrack follows a plain controller through its status', (tester) async {
-    final c = AnimationController(vsync: const TestVSync(), duration: const Duration(milliseconds: 200)).kfTrack('plain');
+    final c = AnimationController(
+      vsync: const TestVSync(),
+      duration: const Duration(milliseconds: 200),
+    ).kfTrack('plain');
     expect(sink.signals.last.name, 'plain');
     c.forward();
     expect(sink.anims.single.$1.fn, 'forward');
@@ -256,15 +298,17 @@ void main() {
     final key = GlobalKey<NavigatorState>();
     final seen = <String>[];
     rt.tapNavigation((r) => seen.add(r.route));
-    await tester.pumpWidget(MaterialApp(
-      navigatorKey: key,
-      navigatorObservers: [observer],
-      routes: {
-        '/': (_) => const Text('home'),
-        '/details': (_) => const Text('details'),
-        '/more': (_) => const Text('more'),
-      },
-    ));
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: key,
+        navigatorObservers: [observer],
+        routes: {
+          '/': (_) => const Text('home'),
+          '/details': (_) => const Text('details'),
+          '/more': (_) => const Text('more'),
+        },
+      ),
+    );
     key.currentState!.pushNamed('/details', arguments: {'id': 7, 'skip': Object()});
     await tester.pumpAndSettle();
     expect(rt.currentRoute!.route, '/details');
