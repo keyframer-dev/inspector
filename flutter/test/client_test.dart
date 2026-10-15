@@ -56,7 +56,7 @@ void main() {
         'screen': {'width': 390, 'height': 844, 'scale': 3},
         'scenarios': <String>[],
         'protocol': 1,
-        'sdk': {'name': 'keyframer_inspector', 'version': '0.0.1'},
+        'sdk': {'name': 'keyframer_inspector', 'version': '0.1.0'},
         'framework': 'flutter',
         'osVersion': '18.6',
         'build': 'debug',
