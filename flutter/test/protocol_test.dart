@@ -175,10 +175,14 @@ void main() {
     expect(actual, file.readAsStringSync());
   });
 
-  // Runs when the monorepo's TypeScript is installed (it is wherever the inspector is developed).
-  final tsc = File('../../node_modules/.bin/tsc');
+  // Runs when the workspace's TypeScript is installed (it is wherever the inspector is developed): the
+  // inspector's own node_modules, or Keyframer's when the inspector is its subtree.
+  final tsc = ['../../node_modules/.bin/tsc', '../../../node_modules/.bin/tsc'].map(File.new).firstWhere(
+    (f) => f.existsSync(),
+    orElse: () => File('../../node_modules/.bin/tsc'),
+  );
   test('the goldens type-check against protocol/inspector.ts', () {
     final r = Process.runSync(tsc.path, ['-p', 'tool/tsconfig.goldens.json']);
     expect(r.exitCode, 0, reason: '${r.stdout}${r.stderr}');
-  }, skip: tsc.existsSync() ? false : 'no TypeScript in ../../node_modules');
+  }, skip: tsc.existsSync() ? false : 'no TypeScript in node_modules');
 }

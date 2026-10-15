@@ -9,8 +9,8 @@ Status: a working vertical slice (UIKit). SwiftUI is not covered yet (see the en
 ## Try it
 
 ```swift
-// Package.swift, or Xcode: File > Add Package Dependencies > Add Local
-.package(path: "../animation-editor/inspector-native/ios")
+// Package.swift, or Xcode: File > Add Package Dependencies
+.package(url: "https://github.com/keyframer-dev/inspector", from: "0.1.0")
 
 import KeyframerInspector
 

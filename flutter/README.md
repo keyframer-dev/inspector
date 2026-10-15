@@ -50,7 +50,7 @@ unless built with `--dart-define=KEYFRAMER_INSPECTOR=true` or given `enabled: tr
 The desktop app will host the relay. Until then, `tool/relay.dart` is a stand-in with the same contract.
 
 ```sh
-cd inspector-native/flutter
+cd flutter
 dart run tool/relay.dart --verbose          # ws://127.0.0.1:8790, /app and /editor
 
 cd example
