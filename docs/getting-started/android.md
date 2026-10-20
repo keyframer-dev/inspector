@@ -17,15 +17,15 @@ Views:
 
 ```kotlin
 // build.gradle.kts
-debugImplementation("dev.keyframer:keyframer-inspector:0.1.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.1.0")   // same API, does nothing, no OkHttp
+debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")   // same API, does nothing, no OkHttp
 ```
 
 Compose (these replace the two lines above; each brings its base module):
 
 ```kotlin
-debugImplementation("dev.keyframer:keyframer-inspector-compose:0.1.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.1.0")
+debugImplementation("dev.keyframer:keyframer-inspector-compose:0.2.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.2.0")
 ```
 
 ## 2. Start it

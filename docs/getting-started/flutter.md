@@ -16,7 +16,7 @@ You need Flutter 3.29 or later. It runs on iOS, Android, macOS, Windows, Linux a
 ```yaml
 # pubspec.yaml
 dependencies:
-  keyframer_inspector: ^0.1.1
+  keyframer_inspector: ^0.2.0
 ```
 
 ## 2. Wrap the app

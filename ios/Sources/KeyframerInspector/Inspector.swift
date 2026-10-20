@@ -30,7 +30,7 @@ import UIKit
     private static let maxQueuedEvents = 2000
     private static let maxSamplesPerMessage = 3000
     private static let maxRecordedAnimations = 400
-    static let sdkVersion = "0.1.0"
+    static let sdkVersion = "0.2.0"
 
     let config: KeyframerInspector.Configuration
     private let resolver: CallSiteResolver

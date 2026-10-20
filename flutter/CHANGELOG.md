@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.0
 
 - Slow motion, pause and step (the `time` message and capability): speeds through `timeDilation`, a
   pause by holding the scheduler's frame time stamps, steps by one frame at the display's rate. Every

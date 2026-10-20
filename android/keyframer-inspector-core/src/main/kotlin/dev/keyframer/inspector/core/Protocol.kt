@@ -98,7 +98,7 @@ data class DeviceInfo(val name: String? = null, val model: String? = null, val i
 /** The SDK, as `hello` names it. */
 object Sdk {
     const val NAME = "keyframer-inspector"
-    const val VERSION = "0.1.0"
+    const val VERSION = "0.2.0"
     /** The protocol version this SDK speaks. */
     const val PROTOCOL = 1
 }

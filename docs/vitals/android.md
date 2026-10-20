@@ -27,8 +27,8 @@ dependencies {
   implementation("dev.keyframer:vitals-compose:0.1.0")   // Compose apps
 
   // The inspector stays development only, as before
-  debugImplementation("dev.keyframer:keyframer-inspector:0.1.0")
-  releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.1.0")
+  debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
+  releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")
 }
 ```
 

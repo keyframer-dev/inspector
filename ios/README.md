@@ -12,7 +12,7 @@ visibility markers and render hints. SwiftUI through an opt-in product, `Keyfram
 
 ```swift
 // Package.swift, or Xcode: File > Add Package Dependencies
-.package(url: "https://github.com/keyframer-dev/inspector", from: "0.1.0")
+.package(url: "https://github.com/keyframer-dev/inspector", from: "0.2.0")
 
 import KeyframerInspector
 

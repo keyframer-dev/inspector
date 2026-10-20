@@ -17,7 +17,7 @@ Flutter 3.29 or later. iOS, Android, macOS, Windows, Linux and the web.
 ```yaml
 # pubspec.yaml
 dependencies:
-  keyframer_inspector: ^0.1.1
+  keyframer_inspector: ^0.2.0
 ```
 
 ```dart

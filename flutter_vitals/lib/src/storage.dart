@@ -12,7 +12,10 @@ import 'protocol.dart';
 /// launch, and there are no checkpoints, so a session that ends in a crash or a kill is not sent. Pass a
 /// persistent adapter (shared_preferences, a file) to keep them; see the README.
 abstract class VitalsStorage {
+  /// The value stored under [key], or `null` when there is none.
   Future<String?> read(String key);
+
+  /// Stores [value] under [key]; `null` deletes the key.
   Future<void> write(String key, String? value);
 
   /// Whether what is written survives the process. Checkpoints are written only when it does.
@@ -21,11 +24,16 @@ abstract class VitalsStorage {
 
 /// Keeps everything in memory, for this process only. No checkpoints.
 class MemoryVitalsStorage implements VitalsStorage {
+  /// An empty store.
+  MemoryVitalsStorage();
+
   final Map<String, String> _values = {};
 
+  /// The value stored under [key] in this process, or `null`.
   @override
   Future<String?> read(String key) async => _values[key];
 
+  /// Stores [value] under [key] for this process; `null` deletes the key.
   @override
   Future<void> write(String key, String? value) async {
     if (value == null) {

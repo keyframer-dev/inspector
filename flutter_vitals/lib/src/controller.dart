@@ -16,6 +16,7 @@ import 'vitals.dart';
 ///
 /// The stack is taken once, here, and read only when the controller first runs in a measured session.
 class VitalsAnimationController extends AnimationController {
+  /// An [AnimationController] whose runs are measured as the animation [name].
   // Never inlined: frame 0 of the stack is this constructor, frame 1 the code that called it.
   @pragma('vm:never-inline')
   VitalsAnimationController({

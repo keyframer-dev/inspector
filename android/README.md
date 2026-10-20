@@ -113,8 +113,8 @@ otherwise). After changing a message: `./gradlew :keyframer-inspector-core:test 
 
 ```kotlin
 // build.gradle.kts
-debugImplementation("dev.keyframer:keyframer-inspector:0.1.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.1.0")   // same API, does nothing, no OkHttp
+debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")   // same API, does nothing, no OkHttp
 
 // Application.onCreate
 Keyframer.start(this)                                   // debuggable builds only, unless enableInRelease
@@ -144,8 +144,8 @@ The relay is plain `ws://`, so the app must allow cleartext to that host only (s
 
 ```kotlin
 // build.gradle.kts: these replace the two lines above (each brings its base module)
-debugImplementation("dev.keyframer:keyframer-inspector-compose:0.1.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.1.0")
+debugImplementation("dev.keyframer:keyframer-inspector-compose:0.2.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.2.0")
 
 // The same calls with kf in front: the same parameters, the same behaviour
 val height by kfAnimateDpAsState(if (open) 200.dp else 110.dp, spring(dampingRatio = 0.6f), label = "height")

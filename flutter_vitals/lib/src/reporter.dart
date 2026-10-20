@@ -18,6 +18,7 @@ enum VitalsEnvironment { production, development }
 /// package has no plugin dependencies, so it reads none of these itself. `model` and `memoryGb` are
 /// sent only while the project collects device models.
 class VitalsDevice {
+  /// Every field is optional: pass what the app reads.
   const VitalsDevice({this.model, this.memoryGb, this.osMajor, this.tier});
 
   /// The raw model identifier: `iPhone15,3` (iosInfo.utsname.machine), `SM-A146B` (androidInfo.model).

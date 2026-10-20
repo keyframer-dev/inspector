@@ -7,7 +7,7 @@ const String vitalsEndpoint = 'https://vitals.keyframer.dev';
 
 /// This package, as reports name it. A test checks the version matches pubspec.yaml.
 const String vitalsSdkName = 'keyframer_vitals';
-const String vitalsSdkVersion = '0.1.0';
+const String vitalsSdkVersion = '0.1.1';
 
 /// Histogram buckets of frames missed per frame, by lower bound: 0, 1, 2, 3-4, 5-8, 9-16, 17-32, 33+.
 const List<int> vitalsBuckets = [0, 1, 2, 3, 5, 9, 17, 33];

@@ -15,7 +15,7 @@ You need Xcode 16 or later and iOS 15 or later, and the [desktop app](desktop.md
 
 ```swift
 // Package.swift, or Xcode: File > Add Package Dependencies
-.package(url: "https://github.com/keyframer-dev/inspector", from: "0.1.0")
+.package(url: "https://github.com/keyframer-dev/inspector", from: "0.2.0")
 ```
 
 ## 2. Start it

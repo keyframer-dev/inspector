@@ -10,7 +10,7 @@ const String kfRasterThread = 'ui';
 /// The protocol version this SDK speaks, and the SDK itself (keep in step with pubspec.yaml).
 const int kfProtocolVersion = 1;
 const String kfSdkName = 'keyframer_inspector';
-const String kfSdkVersion = '0.1.1';
+const String kfSdkVersion = '0.2.0';
 
 /// What the two threads are called here (`InspectorThreads`): animations tick on the UI isolate.
 const Map<String, Object?> kfThreads = {

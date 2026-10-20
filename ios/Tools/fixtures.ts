@@ -142,7 +142,7 @@ const app: InspectorAppMessage[] = [
     screen: { width: 402, height: 874, scale: 3 },
     scenarios: ['bounce', 'spin'],
     protocol: 1,
-    sdk: { name: 'KeyframerInspector', version: '0.1.0' },
+    sdk: { name: 'KeyframerInspector', version: '0.2.0' },
     framework: 'uikit',
     osVersion: '26.5',
     threads: { js: { label: 'Main', animates: true } },
