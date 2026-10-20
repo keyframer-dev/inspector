@@ -135,7 +135,7 @@ class InspectorSessionTest {
         session.removeSignal("a")
         p.advance(100.0)
         val events = sentOf("events").flatMap { it["events"] as List<Map<String, Any?>> }
-        assertEquals(listOf(mapOf("kind" to "unsignal", "id" to "a")), events.filter { it["kind"] == "unsignal" })
+        assertEquals(listOf(mapOf("kind" to "unsignal", "id" to "a", "t" to 50.0)), events.filter { it["kind"] == "unsignal" })
         val before = recordedSamples().count { it["id"] == "a" }
         p.advance(100.0)
         assertEquals(before, recordedSamples().count { it["id"] == "a" })
@@ -295,5 +295,261 @@ class InspectorSessionTest {
         sockets.last.listener.onClosed(null)
         p.advance(20_000.0)
         assertEquals(1, sockets.opened.size)
+    }
+
+    // ── time, display, accessibility, render hints ─────────────────────────────────────────────
+
+    @Test
+    fun `time is answered with the speed in effect, and is 1 when the app cannot change it`() {
+        open()
+        receive("""{"type":"time","scale":0.25}""")
+        assertTrue(host.timeCalls.isEmpty())
+        assertEquals(mapOf("type" to "time", "scale" to 1.0), sentOf("time").single())
+        host.canControlTime = true
+        receive("""{"type":"time","scale":0.25}""")
+        receive("""{"type":"time","scale":0,"step":2}""")
+        assertEquals(listOf(0.25 to null, 0.0 to 2), host.timeCalls)
+        assertEquals(listOf(1.0, 0.25, 0.0), sentOf("time").map { it["scale"] })
+        // Nothing usable: no change, still answered with the speed in effect.
+        receive("""{"type":"time","scale":-3}""")
+        receive("""{"type":"time"}""")
+        assertEquals(listOf(0.25 to null, 0.0 to 2), host.timeCalls)
+        assertEquals(listOf(1.0, 0.25, 0.0, 0.0, 0.0), sentOf("time").map { it["scale"] })
+        assertEquals(0.0, session.timeScale)
+        // The capability is in the hello.
+        receive("""{"type":"hello","role":"editor"}""")
+        assertEquals("time", (sentOf("hello").last()["capabilities"] as List<*>).last())
+    }
+
+    @Test
+    fun `a new editor hears the speed after the hello, and the last one leaving restores it`() {
+        host.canControlTime = true
+        open()
+        receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
+        receive("""{"type":"time","scale":0.5}""")
+        val before = sentOf("time").size
+        receive("""{"type":"presence","app":true,"editors":2,"cli":false}""")
+        assertEquals(before + 1, sentOf("time").size)
+        receive("""{"type":"hello","role":"editor"}""")
+        val out = sent()
+        val hello = out.indexOfLast { it["type"] == "hello" }
+        assertEquals(mapOf("type" to "time", "scale" to 0.5), out[hello + 1])
+        // One of two leaves: still controlled.
+        receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
+        assertEquals(0.5, session.timeScale)
+        val answers = sentOf("time").size
+        receive("""{"type":"presence","app":true,"editors":0,"cli":false}""")
+        assertEquals(1.0 to null, host.timeCalls.last())
+        assertEquals(1.0, session.timeScale)
+        // The reset is said, so a relay that remembers the speed forgets it.
+        assertEquals(listOf(mapOf("type" to "time", "scale" to 1.0)), sentOf("time").drop(answers))
+    }
+
+    @Test
+    fun `the connection dropping, or dispose, puts the speed back`() {
+        host.canControlTime = true
+        open()
+        receive("""{"type":"time","scale":0}""")
+        sockets.last.listener.onClosed("gone")
+        p.runDue()
+        assertEquals(1.0 to null, host.timeCalls.last())
+        p.advance(500.0)
+        open()
+        receive("""{"type":"time","scale":0.1}""")
+        session.dispose()
+        assertEquals(1.0 to null, host.timeCalls.last())
+        // Said before the socket closes; the reset when the connection dropped had nobody to tell.
+        assertEquals(mapOf("type" to "time", "scale" to 1.0), Json.parse(sockets.last.sent.last()))
+        assertEquals(listOf(0.0, 0.1, 1.0), sentOf("time").map { it["scale"] })
+    }
+
+    @Test
+    fun `speed changes while recording are time markers, and a recording started slowed says so`() {
+        host.canControlTime = true
+        open()
+        receive("""{"type":"time","scale":0.5}""")
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        p.advance(100.0)
+        receive("""{"type":"time","scale":0}""")
+        receive("""{"type":"time","scale":0,"step":1}""")
+        p.advance(50.0)
+        receive("""{"type":"time","scale":1}""")
+        p.advance(100.0)
+        val markers = sentOf("samples").flatMap { (it["markers"] as? List<Map<String, Any?>>).orEmpty() }.filter { it["kind"] == "time" }
+        // Each step is a marker of its own, with the frames it moved on.
+        assertEquals(
+            listOf(Triple(0.0, 0.5, null), Triple(100.0, 0.0, null), Triple(100.0, 0.0, 1.0), Triple(150.0, 1.0, null)),
+            markers.map { Triple(it["t"], it["scale"], it["step"]) },
+        )
+    }
+
+    @Test
+    fun `the hello carries the display and motion settings, and a recording gets what changed since`() {
+        host.display = DisplayInfo(120.0, adaptive = true)
+        host.accessibility = AccessibilityInfo(false)
+        open()
+        val hello = sentOf("hello").single()
+        assertEquals(mapOf("hz" to 120.0, "adaptive" to true), hello["display"])
+        assertFalse("device" in hello)
+        assertEquals(mapOf("reduceMotion" to false), hello["accessibility"])
+        // The display idles at 60 Hz and Remove animations went on after the hello.
+        host.rate = 60.000004f
+        host.accessibility = AccessibilityInfo(true)
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        p.advance(100.0)
+        val markers = sentOf("samples").flatMap { (it["markers"] as? List<Map<String, Any?>>).orEmpty() }
+        assertEquals(
+            listOf(mapOf("kind" to "display", "t" to 0.0, "hz" to 60.0), mapOf("kind" to "accessibility", "t" to 0.0, "reduceMotion" to true)),
+            markers.filter { it["kind"] == "display" || it["kind"] == "accessibility" },
+        )
+    }
+
+    @Test
+    fun `with a known display, frames are counted against its rate, and display markers move it`() {
+        host.display = DisplayInfo(120.0)
+        host.rate = 120f
+        open()
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        // 60 Hz frames on a 120 Hz display: each one skipped a frame.
+        p.advance(300.0, frameMs = 1000.0 / 60)
+        session.flush()
+        val drops = sentOf("samples").flatMap { (it["drops"] as? List<Map<String, Any?>>).orEmpty() }
+        assertTrue(drops.size > 10, "got ${drops.size}")
+        val before = drops.size
+        host.markerSink!!(Marker.Display(p.now.toLong(), 60.0))
+        p.advance(300.0, frameMs = 1000.0 / 60)
+        session.flush()
+        assertEquals(before, sentOf("samples").flatMap { (it["drops"] as? List<Map<String, Any?>>).orEmpty() }.size)
+        val display = sentOf("samples").flatMap { (it["markers"] as? List<Map<String, Any?>>).orEmpty() }.single { it["kind"] == "display" }
+        assertEquals(60.0, display["hz"])
+    }
+
+    @Test
+    fun `render hints ride with the catalog, and leave with their signal`() {
+        session.addSignal(ValueSignal("card"))
+        session.reportRenderHint("card", "layer-alpha", "alpha animates on LinearLayout")
+        session.reportRenderHint("card", "layer-alpha", "alpha animates on LinearLayout")
+        open()
+        val first = sentOf("events").single()["events"] as List<Map<String, Any?>>
+        // The same hint again is not news.
+        assertEquals(listOf("signal", "renderHint"), first.map { it["kind"] })
+        receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
+        // The catalog keeps one per signal and hint.
+        val catalog = sentOf("events").last()["events"] as List<Map<String, Any?>>
+        assertEquals(listOf("signal", "renderHint"), catalog.map { it["kind"] })
+        assertEquals(mapOf("kind" to "renderHint", "id" to "card", "hint" to "layer-alpha", "detail" to "alpha animates on LinearLayout"), catalog[1])
+        session.removeSignal("card")
+        p.advance(100.0)
+        receive("""{"type":"presence","app":true,"editors":2,"cli":false}""")
+        assertTrue((sentOf("events").last()["events"] as List<Map<String, Any?>>).none { it["kind"] == "renderHint" })
+    }
+
+    @Test
+    fun `the hello names the device the host reports`() {
+        host.device = DeviceInfo(name = "Pixel 4 API 35", model = "sdk_gphone64_arm64", id = "Pixel_4_API_35", simulator = true)
+        open()
+        assertEquals(
+            mapOf("name" to "Pixel 4 API 35", "model" to "sdk_gphone64_arm64", "id" to "Pixel_4_API_35", "simulator" to true),
+            sentOf("hello").single()["device"],
+        )
+    }
+
+    // ── recorders ──────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    fun `of two recorders, one stopping leaves the other recording, and the clock starts once`() {
+        session.addSignal(ValueSignal("a"))
+        session.addSignal(ValueSignal("b"))
+        open()
+        receive("""{"type":"presence","app":true,"editors":2,"cli":false}""")
+        receive("""{"type":"record","signalIds":["*"],"on":true,"recorder":"panel"}""")
+        p.advance(100.0)
+        receive("""{"type":"record","signalIds":["b"],"on":true,"recorder":"ci"}""")
+        p.advance(100.0)
+        // The second recorder did not restart the recording's clock.
+        assertTrue(recordedSamples().map { it["t"] as Double }.zipWithNext().all { (x, y) -> y >= x })
+        receive("""{"type":"record","signalIds":["*"],"on":false,"recorder":"panel"}""")
+        assertTrue(session.isRecording)
+        session.flush()
+        val before = recordedSamples()
+        p.advance(200.0)
+        session.flush()
+        val after = recordedSamples().drop(before.size)
+        // Only the ci recorder's id from here on.
+        assertEquals(setOf("b"), after.map { it["id"] }.toSet())
+        assertTrue((after.first()["t"] as Double) > 200)
+        receive("""{"type":"record","signalIds":["b"],"on":false,"recorder":"ci"}""")
+        assertFalse(session.isRecording)
+        assertFalse(p.framesRunning)
+    }
+
+    @Test
+    fun `off without a recorder stops only the anonymous one`() {
+        session.addSignal(ValueSignal("a"))
+        open()
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        receive("""{"type":"record","signalIds":["a"],"on":true,"recorder":"mcp"}""")
+        receive("""{"type":"record","signalIds":["*"],"on":false}""")
+        assertTrue(session.isRecording)
+        // An off for an id it does not record leaves a recorder as it is.
+        receive("""{"type":"record","signalIds":["zzz"],"on":false,"recorder":"mcp"}""")
+        assertTrue(session.isRecording)
+        receive("""{"type":"record","signalIds":["a"],"on":false,"recorder":"mcp"}""")
+        assertFalse(session.isRecording)
+    }
+
+    @Test
+    fun `the last editor leaving drops every recorder`() {
+        session.addSignal(ValueSignal("a"))
+        open()
+        receive("""{"type":"presence","app":true,"editors":2,"cli":false}""")
+        receive("""{"type":"record","signalIds":["*"],"on":true,"recorder":"panel"}""")
+        receive("""{"type":"record","signalIds":["a"],"on":true,"recorder":"ci"}""")
+        receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
+        assertTrue(session.isRecording)
+        receive("""{"type":"presence","app":true,"editors":0,"cli":false}""")
+        assertFalse(session.isRecording)
+        assertFalse(p.framesRunning)
+    }
+
+    @Test
+    fun `the connection dropping drops every recorder`() {
+        session.addSignal(ValueSignal("a"))
+        open()
+        receive("""{"type":"record","signalIds":["*"],"on":true,"recorder":"panel"}""")
+        receive("""{"type":"record","signalIds":["a"],"on":true}""")
+        assertTrue(session.isRecording)
+        sockets.last.listener.onClosed("gone")
+        p.runDue()
+        assertFalse(session.isRecording)
+        assertFalse(p.framesRunning)
+        // Back again, nothing records until an editor asks.
+        p.advance(500.0)
+        open()
+        assertFalse(session.isRecording)
+    }
+
+    @Test
+    fun `values mounting and going away while recording say when, the catalog does not`() {
+        session.addSignal(ValueSignal("before"))
+        open()
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        p.advance(100.0)
+        session.addSignal(ValueSignal("sheet"))
+        p.advance(200.0)
+        session.removeSignal("sheet")
+        p.advance(100.0)
+        session.flush()
+        val events = sentOf("events").flatMap { it["events"] as List<Map<String, Any?>> }
+        val mounted = events.single { it["kind"] == "signal" && (it["site"] as Map<String, Any?>)["id"] == "sheet" }
+        assertEquals(100.0, mounted["t"])
+        assertEquals(mapOf("kind" to "unsignal", "id" to "sheet", "t" to 300.0), events.single { it["kind"] == "unsignal" })
+        // Registered before recording: no time.
+        assertFalse("t" in events.single { it["kind"] == "signal" && (it["site"] as Map<String, Any?>)["id"] == "before" })
+        // A panel that joins later gets the catalog as registered, with no recording time.
+        session.addSignal(ValueSignal("again"))
+        receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
+        val catalog = sentOf("events").last()["events"] as List<Map<String, Any?>>
+        assertTrue(catalog.none { "t" in it })
     }
 }

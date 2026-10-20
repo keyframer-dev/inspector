@@ -22,6 +22,7 @@ data class SignalSite(
     val column: Int? = 0,
     val writable: Boolean? = null,
     val kind: String? = null,
+    val prop: String? = null,
 )
 
 /** An interaction an editor or an agent can run. See keyframer-inspector-core. */

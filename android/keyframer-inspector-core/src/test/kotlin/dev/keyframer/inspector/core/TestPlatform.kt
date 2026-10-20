@@ -83,6 +83,19 @@ class FakeHost(private val p: TestPlatform) : Host {
     var replays = 0
     var captureReply: Pair<String?, String?> = "BASE64" to null
     val captureRequests = ArrayList<Triple<String, Double, Int?>>()
+    override var display: DisplayInfo? = null
+    override var accessibility: AccessibilityInfo? = null
+    override var device: DeviceInfo? = null
+    var rate = 60f
+    override fun refreshRate() = rate
+    override var canControlTime = false
+    /** What setTime was asked, and what it answers (the scale, unless set). */
+    val timeCalls = ArrayList<Pair<Double, Int?>>()
+    var timeAnswer: ((Double) -> Double?)? = null
+    override fun setTime(scale: Double, step: Int?): Double? {
+        timeCalls.add(scale to step)
+        return timeAnswer?.invoke(scale) ?: scale
+    }
 
     override fun watchMarkers(onMarker: (Marker) -> Unit): Cancellable {
         markerSink = onMarker

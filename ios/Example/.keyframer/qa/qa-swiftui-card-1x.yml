@@ -1,0 +1,13 @@
+# QA SwiftUI check (passes today): withKeyframerAnimation(.spring(response 0.5, dampingFraction 0.55))
+# on the card (theory 12.6%, measured 11.7-12.2%), .animation(.easeInOut(0.6)) on the dot (566 ms).
+# Note: traced SwiftUI values change every 3rd frame (20 Hz) on an iOS 26.5 simulator.
+name: qa swiftui card 1x
+flow: { scenario: swiftui }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: SwiftUICardsView.card
+    overshoot: 10%..15%
+  - value: SwiftUICardsView.dot/x
+    duration: 500ms..700ms
+    overshoot: < 1%
+  - none: [two-writers, jump]

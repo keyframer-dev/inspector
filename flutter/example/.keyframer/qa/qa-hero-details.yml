@@ -1,0 +1,11 @@
+# QA check: Hero flight and the details entrance. The Hero is reported per flight; bars runs
+# animateTo(1, 900 ms, easeOutBack) with room above 1 (upperBound 1.2, example bug EN2 fixed), so it
+# overshoots like the curve (about 8.7%) and settles in about 900 ms. Expectations follow the code.
+name: qa hero details
+flow: { scenario: open details }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: bars
+    duration: 800ms..950ms
+    overshoot: 6%..12%
+  - none: [two-writers, jump]

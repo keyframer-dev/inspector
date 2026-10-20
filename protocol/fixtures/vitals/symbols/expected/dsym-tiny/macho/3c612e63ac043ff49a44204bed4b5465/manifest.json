@@ -1,0 +1,1 @@
+{"format":"keyframer-vitals-symbols","version":1,"kind":"macho","debugId":"3c612e63ac043ff49a44204bed4b5465","name":"Tiny","arch":"arm64","chunks":[{"file":"0000.json","first":"00000000000003f8"}],"createdAt":"1970-01-01T00:00:00.000Z","cli":{"name":"keyframer-vitals","version":"0.0.0-fixture"}}

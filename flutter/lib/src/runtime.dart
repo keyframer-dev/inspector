@@ -19,11 +19,29 @@ class KfSignal {
     this.fallbackKey,
     this.beginPlayback,
     this.endPlayback,
+    this.source,
+    this.owner,
+    this.writable = true,
+    this.prop,
   });
 
   final double Function() read;
   final void Function(double v) write;
   final String? name;
+
+  /// The object behind the value (an AnimationController, a ValueNotifier): how the widget tree's
+  /// animated widgets that listen to it are found (visibility, render hints).
+  final Object? source;
+
+  /// What created it, when the platform says (a controller's vsync State): where its widgets are when no
+  /// animated widget listens to it directly (a `setState` in a listener).
+  Object? owner;
+
+  /// False when playback cannot write it back (`InspectorSignalSite.writable`).
+  final bool writable;
+
+  /// The property it animates, when known (`InspectorSignalSite.prop`).
+  final String? prop;
 
   /// Where it was created, when the stack trace said.
   final KfStackFrame? frame;
@@ -52,6 +70,9 @@ class KfSignal {
     final file = f != null ? sourceFile(f.uri, appPackage: rt.appPackage, root: rt.root) : 'unknown';
     final base = f != null ? '$file:${f.line}:${f.column}' : 'value:${fallbackKey ?? 'unnamed'}';
     final n = _slot + 1;
+    // A second instance is told apart by number only when it would read the same as another one
+    // (two rows from one builder, both "row"); values with names of their own keep them.
+    final same = n > 1 && rt.signals.values.any((o) => !identical(o, this) && o.baseKey == baseKey && o.name == name);
     return KfSignalSite(
       id: n == 1 ? base : '$base#$n',
       file: file,
@@ -59,7 +80,9 @@ class KfSignal {
       // AOT frames have no column (parsed as 0).
       column: f != null && f.column > 0 ? f.column : null,
       component: f != null ? componentOf(f.member) : null,
-      name: name == null ? null : (n == 1 ? name : '$name #$n'),
+      name: name == null || !same ? name : '$name #$n',
+      writable: writable,
+      prop: prop,
     );
   }
 }

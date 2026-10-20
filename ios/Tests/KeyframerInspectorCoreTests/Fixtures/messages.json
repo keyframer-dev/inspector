@@ -33,14 +33,45 @@
       "scrub",
       "overrides",
       "replay",
-      "scenarios"
-    ]
+      "scenarios",
+      "time"
+    ],
+    "display": {
+      "hz": 120,
+      "adaptive": true
+    },
+    "accessibility": {
+      "reduceMotion": false
+    },
+    "device": {
+      "name": "iPhone 17 Pro",
+      "model": "iPhone18,1",
+      "id": "D95F3325-AE85-4445-9CB9-2D3C90388D88",
+      "simulator": true
+    }
   },
   {
     "type": "hello",
     "role": "app",
     "app": "Bare",
     "platform": "ios"
+  },
+  {
+    "type": "hello",
+    "role": "app",
+    "app": "SwiftUI",
+    "platform": "ios",
+    "framework": "swiftui",
+    "display": {
+      "hz": 60
+    },
+    "accessibility": {
+      "reduceMotion": true
+    },
+    "device": {
+      "model": "iPhone17,1",
+      "simulator": false
+    }
   },
   {
     "type": "scenarios",
@@ -131,7 +162,7 @@
         "kind": "anim",
         "eid": 8,
         "site": {
-          "id": "ViewController.spin()+212/transform.rotation.z",
+          "id": "ViewController.spin()/transform.rotation.z",
           "file": "ViewController.spin()",
           "line": 0,
           "column": 0,
@@ -221,6 +252,67 @@
               "prop": "transform.scale"
             }
           ]
+        }
+      },
+      {
+        "kind": "renderHint",
+        "id": "CardsViewController.card/shadowPath",
+        "hint": "shadow-path",
+        "detail": "shadowOpacity 0.25, shadowRadius 12 and no shadowPath on CardsViewController.card"
+      },
+      {
+        "kind": "renderHint",
+        "id": "CardsViewController.pill/blur",
+        "hint": "blur"
+      },
+      {
+        "kind": "anim",
+        "eid": 9,
+        "site": {
+          "id": "KeyframerExample/SwiftUICardsView.swift:41:13/card",
+          "file": "KeyframerExample/SwiftUICardsView.swift",
+          "line": 41,
+          "column": 13,
+          "fn": "withAnimation",
+          "component": "SwiftUICardsView",
+          "target": "card",
+          "prop": null,
+          "params": [
+            {
+              "path": "1.response",
+              "value": 500
+            },
+            {
+              "path": "1.dampingFraction",
+              "value": 0.55
+            }
+          ]
+        },
+        "at": 1760000000300,
+        "args": [
+          -120,
+          {
+            "animation": "spring",
+            "response": 500,
+            "dampingFraction": 0.55,
+            "settlingDuration": 1393.2,
+            "from": 0
+          }
+        ],
+        "thread": "js",
+        "durationMs": 1393.2
+      },
+      {
+        "kind": "signal",
+        "site": {
+          "id": "SwiftUICardsView.dot/x",
+          "file": "KeyframerExample/SwiftUICardsView.swift",
+          "line": 52,
+          "column": 18,
+          "component": "SwiftUICardsView",
+          "name": "dot.x",
+          "kind": "value",
+          "writable": false
         }
       }
     ]
@@ -318,6 +410,52 @@
         "y": 20,
         "site": "App.tsx:20",
         "component": null
+      },
+      {
+        "kind": "accessibility",
+        "t": 1500,
+        "reduceMotion": true
+      },
+      {
+        "kind": "display",
+        "t": 1600,
+        "hz": 60
+      },
+      {
+        "kind": "visibility",
+        "t": 1700,
+        "id": "CardsViewController.pill/position.x",
+        "visible": false,
+        "reason": "offscreen"
+      },
+      {
+        "kind": "visibility",
+        "t": 2300,
+        "id": "CardsViewController.pill/position.x",
+        "visible": true
+      },
+      {
+        "kind": "visibility",
+        "t": 2400,
+        "id": "DetailViewController.header/opacity",
+        "visible": false,
+        "reason": "detached"
+      },
+      {
+        "kind": "time",
+        "t": 1800,
+        "scale": 0.25
+      },
+      {
+        "kind": "time",
+        "t": 2000,
+        "scale": 0
+      },
+      {
+        "kind": "time",
+        "t": 2100,
+        "scale": 0,
+        "step": 6
       }
     ]
   },
@@ -335,6 +473,14 @@
     "type": "frame",
     "id": "f2",
     "error": "No window to capture."
+  },
+  {
+    "type": "time",
+    "scale": 0.25
+  },
+  {
+    "type": "time",
+    "scale": 1
   },
   {
     "type": "hello",
@@ -365,6 +511,22 @@
       "ViewController.card/position.y"
     ],
     "on": false
+  },
+  {
+    "type": "record",
+    "signalIds": [
+      "*"
+    ],
+    "on": true,
+    "recorder": "ci-7f3a"
+  },
+  {
+    "type": "record",
+    "signalIds": [
+      "*"
+    ],
+    "on": false,
+    "recorder": "ci-7f3a"
   },
   {
     "type": "scenario",
@@ -427,6 +589,20 @@
   {
     "type": "scrub",
     "t": null
+  },
+  {
+    "type": "time",
+    "scale": 0.1
+  },
+  {
+    "type": "time",
+    "scale": 0,
+    "step": 1
+  },
+  {
+    "type": "time",
+    "scale": 0,
+    "step": 4
   },
   {
     "type": "apply",

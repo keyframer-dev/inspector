@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (glitch lab): a 150 ms busy loop in scheduleOnUI (app/glitches.tsx:112): about 9 UI frames.
+name: qa glitch block ui
+flow:
+  scenario: "glitch lab: block the UI thread"
+expect:
+  - frames: { ui: "> 5" }
+  - none: [reduce-motion, two-writers, jump, error]

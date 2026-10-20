@@ -26,6 +26,9 @@ dependencies {
 
 tasks.test {
     useJUnit()
+    // GoldensTest rewrites src/test/goldens/messages.ts with -PupdateGoldens=true.
+    systemProperty("keyframer.updateGoldens", providers.gradleProperty("updateGoldens").getOrElse("false"))
+    inputs.dir("src/test/goldens")
     testLogging {
         events("passed", "failed", "skipped")
         exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

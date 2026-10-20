@@ -1,0 +1,230 @@
+{
+  "format": "keyframer-vitals",
+  "version": 1,
+  "app": {
+    "id": "com.acme.shop",
+    "version": "3.4.0",
+    "build": "412",
+    "platform": "android",
+    "framework": "Compose",
+    "environment": "production",
+    "debugId": "3c8e5f1a07b94d62a9e4c2f6b1d8e037"
+  },
+  "sdk": {
+    "name": "dev.keyframer:vitals",
+    "version": "0.1.0"
+  },
+  "device": {
+    "os": "android",
+    "osMajor": 15,
+    "model": "Pixel 7a",
+    "tier": "mid",
+    "memoryGb": 8
+  },
+  "display": {
+    "hz": 90,
+    "adaptive": false,
+    "targetHz": 90
+  },
+  "state": {
+    "lowPower": false
+  },
+  "session": {
+    "nonce": "hT6wB2yN9cRk4Mf0",
+    "seq": 0,
+    "sampleRate": 0.1,
+    "foregroundMs": 182000,
+    "measuredMs": 33900,
+    "ended": "background"
+  },
+  "screens": [
+    {
+      "name": "MainActivity/feed",
+      "ms": 120000,
+      "threads": {
+        "ui": {
+          "frames": 2127,
+          "hist": [
+            2010,
+            70,
+            28,
+            11,
+            5,
+            2,
+            1,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 2711.1,
+          "idleFrames": 700,
+          "idleMissed": 8
+        },
+        "js": {
+          "frames": 2127,
+          "hist": [
+            1980,
+            88,
+            35,
+            14,
+            6,
+            3,
+            1,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 3388.9,
+          "idleFrames": 690,
+          "idleMissed": 12
+        }
+      }
+    },
+    {
+      "name": "MainActivity/product/[id]",
+      "ms": 62000,
+      "threads": {
+        "ui": {
+          "frames": 801,
+          "hist": [
+            760,
+            25,
+            9,
+            4,
+            2,
+            1,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 911.1,
+          "idleFrames": 260,
+          "idleMissed": 3
+        },
+        "js": {
+          "frames": 797,
+          "hist": [
+            744,
+            31,
+            12,
+            5,
+            3,
+            1,
+            1,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 1411.1,
+          "idleFrames": 255,
+          "idleMissed": 5
+        }
+      }
+    }
+  ],
+  "sites": [
+    {
+      "ref": {
+        "kind": "name",
+        "name": "cart-badge"
+      },
+      "key": "cart-badge",
+      "fn": "animateFloatAsState",
+      "component": null,
+      "prop": "scale",
+      "screen": 0,
+      "runs": 17,
+      "activeMs": 5100,
+      "frames": 440,
+      "missed": 22,
+      "hitchMs": 260.4,
+      "worstMs": 54.1
+    },
+    {
+      "ref": {
+        "kind": "jvm",
+        "className": "a.b.c",
+        "method": "a",
+        "line": 3
+      },
+      "fn": "ObjectAnimator",
+      "component": null,
+      "prop": "translationY",
+      "screen": 1,
+      "runs": 8,
+      "activeMs": 2400,
+      "frames": 190,
+      "missed": 29,
+      "hitchMs": 361.7,
+      "worstMs": 233.6
+    },
+    {
+      "ref": {
+        "kind": "jvm",
+        "className": "com.acme.shop.feed.FeedCardKt",
+        "method": "FeedCard",
+        "line": 88,
+        "file": "FeedCard.kt"
+      },
+      "fn": "animateContentSize",
+      "component": "FeedCard",
+      "prop": null,
+      "screen": 0,
+      "runs": 31,
+      "activeMs": 9300,
+      "frames": 820,
+      "missed": 71,
+      "hitchMs": 811.3,
+      "worstMs": 121.9
+    }
+  ],
+  "worst": [
+    {
+      "thread": "js",
+      "ms": 233.6,
+      "missed": 20,
+      "screen": 1,
+      "sites": [
+        1
+      ],
+      "cause": "screen-mount",
+      "afterNavMs": 260
+    },
+    {
+      "thread": "ui",
+      "ms": 121.9,
+      "missed": 10,
+      "screen": 0,
+      "sites": [
+        2
+      ],
+      "cause": "unknown"
+    },
+    {
+      "thread": "js",
+      "ms": 88,
+      "missed": 7,
+      "screen": 0,
+      "sites": [
+        2
+      ],
+      "cause": "scroll"
+    },
+    {
+      "thread": "ui",
+      "ms": 54.1,
+      "missed": 4,
+      "screen": 0,
+      "sites": [
+        0,
+        2
+      ],
+      "cause": "gesture"
+    },
+    {
+      "thread": "ui",
+      "ms": 44.2,
+      "missed": 3,
+      "screen": 1,
+      "sites": [],
+      "cause": "unknown"
+    }
+  ]
+}

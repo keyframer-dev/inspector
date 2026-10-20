@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (several devices): the welcome entrance scenario on an iPhone simulator and an Android emulator.
+# The springs must measure the same on both (Reanimated runs them on each app's clock). Device names
+# as in qa-matrix-sheet.yml: change them to yours.
+name: qa matrix welcome
+targets:
+  - { driver: agent-device, device: "iPhone 16 Pro", platform: ios }
+  - { driver: agent-device, device: Pixel_4_API_VanillaIceCream, platform: android }
+flow:
+  scenario: "welcome: replay the entrance"
+record:
+  settle: 2000ms
+expect:
+  - value: logoScale
+    overshoot: 25%..32%
+    settle: 1.4s..1.8s
+  - value: cardY
+    duration: 400ms..440ms
+  - value: badge
+    overshoot: 6%..9%
+    settle: 1.6s..2s
+  - none: [reduce-motion, unseen, two-writers, jump, error]

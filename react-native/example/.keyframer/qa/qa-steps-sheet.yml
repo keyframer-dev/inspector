@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the sheet's three snaps, tapped from outside by agent-device. Same springs as the scenario
+# (zeta 0.78: about 1.9% overshoot, within 2% about 230 ms in, about 4800 pt/s on the close). It ends
+# closed, so the next run's deep link (to the screen already showing) starts from the same state.
+name: qa steps sheet
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/sheet
+    - wait: { id: sheet-open-half }
+      timeout: 15s
+    - tap: sheet-open-half
+    - wait: 900ms
+    - tap: sheet-open-full
+    - wait: 900ms
+    - tap: sheet-close
+    - wait: 900ms
+record:
+  settle: 600ms
+expect:
+  - value: sheetY
+    overshoot: < 3%
+    settle: 180ms..320ms
+    duration: < 800ms
+    velocity: 4000/s..5600/s
+  - frames: { dropped: < 12 }
+  - none: [reduce-motion, unseen, two-writers, jump, error]

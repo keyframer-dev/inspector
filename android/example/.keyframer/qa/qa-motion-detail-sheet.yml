@@ -1,0 +1,11 @@
+# QA regression check, bugs 2 and 3: the sheet's ObjectAnimator (translationY 360dp -> 0, alpha 0 -> 1,
+# 520 ms) starts from a value applied on its first frame; a >100 ms frame while the activity opens
+# splits the motion. Expect one 520 ms motion. Today: 533 ms with travel 0 (jump folded in), or
+# "moved 2 times, 283 ms" when a long frame lands in it -> FAILS until fixed.
+name: qa motion detail sheet
+flow: { scenario: open detail }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: sheet.translationY
+    duration: 470ms..560ms
+    overshoot: < 1%

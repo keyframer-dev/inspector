@@ -1,0 +1,8 @@
+# QA regression check, bug 1 (iOS frame meter misses a main-thread stall at the very start of a
+# recording). The jank scenario blocks the main thread for 150 ms right after `record`: expect one
+# ~150 ms frame and ~9 dropped. Today: 0 frames, longest 0 ms -> FAILS until fixed.
+name: qa frames jank start
+flow: { scenario: jank }
+record: { speed: 1, settle: 600ms }
+expect:
+  - frames: { longest: "> 140ms", js: ">= 7" }

@@ -78,17 +78,45 @@ interface Host {
      */
     val threads: Map<String, ThreadInfo> get() = linkedMapOf("js" to ThreadInfo("Main", animates = true))
 
-    /** What the panel may ask for. No `scrub` (samples and play-time tracks cover it) and no device `recordings` yet. */
+    /**
+     * What the panel may ask for. No `scrub` (samples and play-time tracks cover it) and no device
+     * `recordings` yet; `time` when the host can change the animation speed.
+     */
     val capabilities: List<String>
-        get() = listOfNotNull(if (canCapture) "capture" else null, "playback", "overrides", "replay", "scenarios")
+        get() = listOfNotNull(if (canCapture) "capture" else null, "playback", "overrides", "replay", "scenarios", if (canControlTime) "time" else null)
 
-    /** The display's refresh rate, a starting point for the frame meter. */
+    /** The display's refresh rate now, a starting point for the frame meter. */
     fun refreshRate(): Float = 60f
+
+    /**
+     * The display as the hello describes it: its highest rate, and whether it switches between several.
+     * Null when the platform cannot say: the frame meter then guesses the rate from the frames it sees,
+     * and readers assume 60 Hz. When it is known, frames are counted against [refreshRate], which the
+     * host keeps current with `display` markers.
+     */
+    val display: DisplayInfo? get() = null
+
+    /** The person's motion settings, for the hello; a change while recording is an `accessibility` marker. */
+    val accessibility: AccessibilityInfo? get() = null
+
+    /** Which device it runs on (see DeviceInfo: a physical device never sends its user-given name). */
+    val device: DeviceInfo? get() = null
+
+    /** Whether [setTime] does anything: the `time` capability. */
+    val canControlTime: Boolean get() = false
+
+    /**
+     * Runs the app's animations at `scale` times their speed (1 normal, 0 paused); `step`, while paused,
+     * advances that many frames at the display's rate and holds again. Returns the scale now in effect,
+     * or null when the app cannot change it.
+     */
+    fun setTime(scale: Double, step: Int?): Double? = null
 
     /**
      * Touches, screens, app state and the like until the returned handle is cancelled, timed on the
      * Clock's monotonic ms (the session moves them onto the recording's clock). The screen the app is on
-     * comes first, as a navigation marker.
+     * comes first, as a navigation marker. `display` markers also set the rate the frame meter counts
+     * against.
      */
     fun watchMarkers(onMarker: (Marker) -> Unit): Cancellable
 

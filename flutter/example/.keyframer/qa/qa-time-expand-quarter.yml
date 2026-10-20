@@ -1,0 +1,13 @@
+# QA time-control check: qa-implicit-expand-1x.yml recorded at 0.25x, read on the app clock (passes
+# today on a `flutter run` build: AnimatedContainer 8.7% and 449 ms, AnimatedOpacity 300 ms). Bug 12
+# applies: a `flutter build ios --debug` app has no widget creation tracking, so nothing is found.
+name: qa implicit expand 0.25x
+flow: { scenario: expand }
+record: { speed: 0.25, settle: 2500ms }
+expect:
+  - value: AnimatedContainer
+    duration: 400ms..500ms
+    overshoot: 6%..12%
+  - value: AnimatedOpacity
+    duration: 250ms..350ms
+  - none: [two-writers, jump]

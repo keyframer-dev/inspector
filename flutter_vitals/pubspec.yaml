@@ -1,0 +1,21 @@
+name: keyframer_vitals
+description: Motion Vitals for Flutter. Counts slow frames in production, per screen and per named animation, and reports them to Keyframer. No personal data, no plugins, no work while nothing moves.
+version: 0.1.0
+homepage: https://keyframer.dev/vitals
+repository: https://github.com/keyframer-dev/inspector/tree/main/flutter_vitals
+issue_tracker: https://github.com/keyframer-dev/inspector/issues
+topics: [performance, animation, monitoring, jank]
+
+environment:
+  sdk: ^3.7.0
+  flutter: '>=3.29.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  fake_async: ^1.3.1

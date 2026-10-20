@@ -1,0 +1,5 @@
+appId: dev.keyframer.inspector.example
+---
+- tapOn:
+    id: "bounce"
+- waitForAnimationToEnd

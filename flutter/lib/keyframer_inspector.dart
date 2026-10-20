@@ -5,7 +5,18 @@ library;
 
 export 'src/call_site.dart'
     show KfStackFrame, parseStackTrace, appFrame, sourceFile, componentOf, formatStack, inspectorFrames;
-export 'src/client.dart' show KfInspectorClient, KfSocket, KfConnector, KfHost, KfTiming, KfTouch, sanitizeArgs;
+export 'src/client.dart'
+    show
+        KfInspectorClient,
+        KfSocket,
+        KfConnector,
+        KfHost,
+        KfDeviceHost,
+        KfTimeHost,
+        KfSceneHost,
+        KfTiming,
+        KfTouch,
+        sanitizeArgs;
 export 'src/controller.dart' show KfAnimationController, KfTrackController, KfTrackNotifier, curveName, kfCaptureSites;
 export 'src/flutter_host.dart' show FlutterKfHost;
 export 'src/frame_meter.dart' show FrameMeter;
@@ -20,4 +31,14 @@ export 'src/inspector.dart'
 export 'src/navigation.dart' show KfNavigatorObserver, kfNavigatorObserver;
 export 'src/protocol.dart';
 export 'src/runtime.dart' show KfRuntime, KfSignal, KfSink;
-export 'src/transport.dart' show relayAppUrl, defaultRelayHost, kfRelayPort, IoKfSocket, currentOs, currentOsVersion;
+export 'src/time_control.dart' show KfClock;
+export 'src/transport.dart'
+    show
+        relayAppUrl,
+        defaultRelayHost,
+        kfRelayPort,
+        IoKfSocket,
+        connectRelaySocket,
+        currentOs,
+        currentOsVersion,
+        currentDevice;

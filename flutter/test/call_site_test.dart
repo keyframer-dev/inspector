@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
 
@@ -30,6 +32,9 @@ package:demo/main.dart 42:15                         [_HomeScreenState.initState
       expect(frames[1].column, 15);
       expect(frames[2].member, 'Object.main');
       expect(frames[2].line, 120);
+      // Compiled JavaScript names no source line: never the app's call site.
+      expect(appFrame(frames.sublist(2)), isNull);
+      expect(appFrame(parseStackTrace('    at f (http://localhost:5000/main.dart.mjs:1:2)')), isNull);
     });
 
     test('reads an AOT trace (file:line, no column)', () {
@@ -57,7 +62,10 @@ isolate_instructions: 104c0c000, vm_instructions: 104c04000
       final here = appFrame(parseStackTrace(StackTrace.current.toString()));
       expect(here, isNotNull);
       expect(here!.uri, endsWith('test/call_site_test.dart'));
-      expect(here.line, 57);
+      // The line above, wherever it is in this file.
+      final line =
+          File('test/call_site_test.dart').readAsLinesSync().indexWhere((l) => l.contains('final here = ')) + 1;
+      expect(here.line, line);
     });
   });
 
@@ -86,6 +94,10 @@ isolate_instructions: 104c0c000, vm_instructions: 104c04000
     expect(componentOf('new KfAnimationController'), 'KfAnimationController');
     expect(componentOf('<anonymous closure>'), isNull);
     expect(componentOf('State.initState'), 'State');
+    // A debug web build prints methods without their class.
+    expect(componentOf('initState'), isNull);
+    expect(componentOf('get [_entrance]'), isNull);
+    expect(componentOf('[_onDragEnd]'), isNull);
   });
 
   test('formatStack writes app frames the way the panel reads stacks', () {

@@ -1,0 +1,11 @@
+{
+  "type": "events",
+  "events": [
+    {
+      "kind": "renderHint",
+      "id": "lib/main.dart:31:5",
+      "hint": "opacity-widget",
+      "detail": "Opacity at lib/main.dart:120 is rebuilt with a new opacity (0.40, then 0.57)"
+    }
+  ]
+}

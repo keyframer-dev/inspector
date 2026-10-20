@@ -1,0 +1,11 @@
+# QA driver check (Argent e2e flow: `launch` restarts the app so Argent can inject its devtools, then
+# taps Bounce). Covers two new bugs: the argent driver reads flow-execute's MCP-level isError only
+# (an errored flow with ok:false "finishes"), and a leading `launch` inside an Argent flow restarts the
+# app inside the recording (ci does not run it before recording, as it does for steps/ad opens).
+name: qa argent launch bounce
+flow: { argent: .keyframer/qa/flows/qa-bounce-argent-launch.yaml }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: card.position.y
+    duration: 450ms..900ms
+    overshoot: 10%..15%

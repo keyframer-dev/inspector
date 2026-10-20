@@ -1,0 +1,12 @@
+# QA regression check, new bug (argent driver ignores flow-execute's own verdict): this fragment taps
+# Bounce on an app Argent did not launch, so Argent answers ok:false, errored:1 ("no app is connected
+# to native devtools") with MCP isError false. ci then reports "card.position.y did not move" instead
+# of "the flow failed (argent): ...". Needs --device and argent on the PATH or in the project (ci does
+# not look next to the agent-device install). Argent refuses flow file names with dots.
+name: qa argent bounce
+flow: { argent: .keyframer/qa/flows/qa-bounce-argent.yaml }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: card.position.y
+    duration: 450ms..900ms
+    overshoot: 10%..15%

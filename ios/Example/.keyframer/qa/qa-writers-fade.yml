@@ -1,0 +1,11 @@
+# QA regression check, bug 4 (false two-writers): one UIViewPropertyAnimator animates the card's
+# alpha and transform. One call, two properties: not two writers. Today: "Two animations write card
+# at once (closure #1 in fade())" -> FAILS until fixed. Measured: opacity 477-483 ms, overshoot 0.
+name: qa writers fade
+flow: { scenario: fade }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: card.opacity
+    duration: 400ms..600ms
+    overshoot: < 1%
+  - none: [two-writers]

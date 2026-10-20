@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (motion checks): the spinner (app/checks.tsx:62) keeps looping under the welcome screen pushed on
+# top: an unseen problem is expected. Nothing else in this list may appear.
+name: qa checks loop under a screen
+flow:
+  scenario: "motion checks: a loop under another screen"
+expect:
+  - none: [reduce-motion, two-writers, jump, error]

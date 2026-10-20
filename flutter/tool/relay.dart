@@ -5,8 +5,11 @@
 // Apps connect to /app?name=<app>&platform=<platform>, panels and CLIs to /editor. Every text frame
 // is one JSON InspectorMessage, forwarded app → editors and editor → app. Like the API's pairing room
 // it sends `presence` to everyone on each join and leave, keeps one app (a new one replaces it), and
-// answers a text `ping` with `pong`. It also keeps the app's last hello and hands it to each editor
-// that joins later, which the room does not need to (its editors join first).
+// answers a text `ping` with `pong`. It also keeps the app's last hello, and its last `time` answer (a
+// slowed or paused app), and hands them to each editor that joins later, which the room does not need
+// to (its editors join first). A new hello clears the speed: a reloaded app runs at 1x. Like the
+// desktop relay, it tells editors which app they show (`apps`, sent on every change; with one app,
+// `select` changes nothing), which is what `keyframer-inspect` and the MCP server wait for.
 
 import 'dart:async';
 import 'dart:convert';
@@ -19,6 +22,9 @@ class KfRelay {
   final bool verbose;
   WebSocket? _app;
   String? _appHello;
+  String? _appTime;
+  Map<String, Object?>? _appInfo;
+  int _appCount = 0;
   final Set<WebSocket> _editors = {};
 
   int get port => _server.port;
@@ -44,13 +50,22 @@ class KfRelay {
       final old = _app;
       _app = ws;
       _appHello = null;
+      _appTime = null;
       if (old != null) unawaited(old.close(4000, 'replaced'));
+      _appInfo = {
+        'id': 'app-${++_appCount}',
+        'name': req.uri.queryParameters['name'] ?? 'app',
+        'platform': req.uri.queryParameters['platform'] ?? 'unknown',
+        'address': req.connectionInfo?.remoteAddress.address ?? '',
+        'connectedAt': DateTime.now().millisecondsSinceEpoch,
+      };
       _log('app joined: ${req.uri.queryParameters['name']} (${req.uri.queryParameters['platform']})');
       ws.listen((data) => _fromApp(ws, data), onDone: () => _left(ws));
     } else {
       _editors.add(ws);
       _log('editor joined (${_editors.length})');
       if (_appHello != null) _put(ws, _appHello!);
+      if (_appTime != null) _put(ws, _appTime!);
       ws.listen((data) => _fromEditor(ws, data), onDone: () => _left(ws));
     }
     _presence();
@@ -61,7 +76,13 @@ class KfRelay {
     if (data == 'ping') return _put(ws, 'pong');
     final type = _type(data);
     if (type == null) return;
-    if (type == 'hello') _appHello = data;
+    if (type == 'hello') {
+      _appHello = data;
+      _appTime = null;
+      _describe(data);
+    } else if (type == 'time') {
+      _appTime = data;
+    }
     if (verbose) _log('app → editors: $type (${data.length} B)');
     for (final e in _editors.toList()) {
       _put(e, data);
@@ -74,6 +95,8 @@ class KfRelay {
     final type = _type(data);
     // An editor's hello is for the relay: presence already told the app.
     if (type == null || type == 'hello') return;
+    // There is one app to show: a selection changes nothing, and is answered with what it shows.
+    if (type == 'select') return _put(ws, _apps());
     if (verbose) _log('editor → app: $type (${data.length} B)');
     final app = _app;
     if (app != null) _put(app, data);
@@ -83,6 +106,8 @@ class KfRelay {
     if (identical(ws, _app)) {
       _app = null;
       _appHello = null;
+      _appTime = null;
+      _appInfo = null;
       _log('app left');
     } else if (_editors.remove(ws)) {
       _log('editor left (${_editors.length})');
@@ -94,9 +119,41 @@ class KfRelay {
     final msg = jsonEncode({'type': 'presence', 'app': _app != null, 'editors': _editors.length, 'cli': false});
     final app = _app;
     if (app != null) _put(app, msg);
+    final apps = _apps();
     for (final e in _editors.toList()) {
       _put(e, msg);
+      _put(e, apps);
     }
+  }
+
+  /// The app's framework and OS version, once its hello says them.
+  void _describe(String hello) {
+    final info = _appInfo;
+    if (info == null) return;
+    try {
+      final m = jsonDecode(hello);
+      if (m is Map) {
+        if (m['framework'] is String) info['framework'] = m['framework'];
+        if (m['osVersion'] is String) info['osVersion'] = m['osVersion'];
+      }
+    } catch (_) {}
+    final apps = _apps();
+    for (final e in _editors.toList()) {
+      _put(e, apps);
+    }
+  }
+
+  /// `apps` (InspectorRelayMessage): the connected app, which every editor shows.
+  String _apps() {
+    final info = _appInfo;
+    return jsonEncode({
+      'type': 'apps',
+      'apps': [
+        if (info != null) {...info, 'editors': _editors.length},
+      ],
+      'attached': info?['id'],
+      'mode': 'auto',
+    });
   }
 
   /// Sends unless that socket is closing: one going away must not take the relay down.

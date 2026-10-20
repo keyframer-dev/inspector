@@ -1,0 +1,1 @@
+{"format":"keyframer-vitals-symbols","version":1,"kind":"elf","debugId":"c3f9ee9a3fa0587cfd669fda94ae06946a4e87c2","name":"app.android-arm64.symbols","arch":"arm64","chunks":[{"file":"0000.json","first":"00000000000101b4"}],"createdAt":"1970-01-01T00:00:00.000Z","cli":{"name":"keyframer-vitals","version":"0.0.0-fixture"}}

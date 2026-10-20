@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (glitch lab): blockJs(300) in onPress drops about 18 JS frames. The problem it must produce, a JS
+# task at app/glitches.tsx:95, is read from the report; here, the frames it costs.
+name: qa glitch block js
+flow:
+  scenario: "glitch lab: block the JS thread"
+expect:
+  - frames: { js: "> 12" }
+  - none: [reduce-motion, two-writers, jump, error]

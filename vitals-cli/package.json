@@ -1,0 +1,32 @@
+{
+  "name": "@keyframerdev/vitals-cli",
+  "version": "0.1.0",
+  "description": "Motion Vitals symbol uploads: dSYMs, Flutter split debug info, R8 mappings and React Native sites files, for keyframer.dev",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "keyframer-vitals": "./bin/keyframer-vitals.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "bun scripts/build.ts",
+    "build:wasm": "bun scripts/build-wasm.ts",
+    "cli": "bun scripts/dev.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17",
+    "typescript": "~6.0.3",
+    "vitest": "^3.0.5"
+  }
+}

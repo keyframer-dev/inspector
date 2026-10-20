@@ -15,16 +15,23 @@
  *     React commits are timed: what a frame drop can be traced back to.
  *   - `capture` sets shared values, waits for the screen to show them and snapshots it with the
  *     `captureScreen` the app passed in (react-native-view-shot's): one frame of an exported recording.
+ *   - `time` runs the app's animations slower, pauses or steps them, where a bridge can (React Native's
+ *     UI thread), and is answered with the speed now. A connection that ends, or loses its last
+ *     editor, puts the speed back to normal.
  *
  * Pure TypeScript with the socket and timers injected, so it runs under vitest. React Native apps
  * import `connectInspector` from '@keyframerdev/inspector/native', which adds the UI-thread hook.
  */
 
 import type {
+  InspectorAccessibility,
   InspectorAppMessage,
   InspectorBuild,
   InspectorCallSite,
+  InspectorCapability,
   InspectorCommit,
+  InspectorDevice,
+  InspectorDisplay,
   InspectorEditorMessage,
   InspectorEvent,
   InspectorFrameDrop,
@@ -38,10 +45,23 @@ import type {
   InspectorUiWork,
 } from '../../protocol/inspector'
 import { HEARTBEAT_INTERVAL_MS, HEARTBEAT_TIMEOUT_MS, inspectorRoomUrl, PING, PONG } from './room'
+import { clampScale, clampStep } from './clock'
 import { watchCommits } from './commits'
+import { closeSamplerWindow, inSamplerWindow, samplerWindow, type SamplerWindow } from './samplerWindow'
 import { createFrameMeter, tickFrameMeter } from './frameMeter'
 import { REACT_NATIVE_THREADS } from './platforms'
-import { applyScrollSamples, createInspector, navigateTo, jsScrollOffsets, restingOffsets, setCapturing, tapJsScroll, tapScrollMounts } from './runtime'
+import {
+  applyScrollSamples,
+  createInspector,
+  emitTimeScale,
+  navigateTo,
+  jsScrollOffsets,
+  restingOffsets,
+  setCapturing,
+  tapJsScroll,
+  tapScrollMounts,
+  timeScale,
+} from './runtime'
 import { PROTOCOL, SDK } from './version'
 import { runScenario, scenarioNames, watchScenarios } from './scenarios'
 import { watchTasks } from './tasks'
@@ -71,6 +91,14 @@ export type InspectorBridgeContext = {
    */
   reportFrames?(stats: InspectorFrameStat[], drops: InspectorFrameDrop[], at: number): void
 }
+/** What the app says about the device in its hello, once it knows: measured or read when it connects. */
+export type AppFacts = {
+  display?: InspectorDisplay
+  accessibility?: InspectorAccessibility
+  /** Capabilities only the device can vouch for (`time`, where the UI runtime can run the clock). */
+  capabilities?: InspectorCapability[]
+}
+
 export type InspectorBridge = {
   setOverrides?(overrides: InspectorOverrides): void
   /** Start / stop measuring this thread's frames (on while anything records). */
@@ -80,8 +108,16 @@ export type InspectorBridge = {
    * rows of `[uiTime, ...values]`. Recording uses it instead of a JS timer when a bridge has it.
    */
   sampleValues?(values: unknown[], onRows: (rows: number[][]) => void): () => void
-  /** Touches and gesture callbacks as markers on the recording's clock (`elapsed`), until the returned function is called. */
-  watchMarkers?(elapsed: () => number, onMarker: (m: InspectorMarker) => void): () => void
+  /**
+   * Touches, gestures, screens, logs and the device's settings as markers on the recording's clock
+   * (`elapsed`), until the returned function is called. `said`: what the hello said, so a setting
+   * that changed since is marked at the start.
+   */
+  watchMarkers?(elapsed: () => number, onMarker: (m: InspectorMarker) => void, said?: AppFacts): () => void
+  /** What the hello says about the device; the hello waits for it (up to `factsTimeoutMs`). */
+  facts?(): Promise<AppFacts>
+  /** Runs animations at `scale` (0: paused), then moves them on `step` frames. False when it cannot here. */
+  setTime?(scale: number, step: number): boolean
   /** Timed worklet runs on the UI thread, per frame: rows of [uiTime, kind, site, name, ms, calls]. */
   watchWork?(onRows: (rows: Array<[number, string, string, string | null, number, number]>) => void): () => void
   /** Where scrolled lists are, per frame: rows of [uiTime, scroll id, x, y]. */
@@ -98,6 +134,11 @@ export type ConnectInspectorOptions = {
   platform?: string
   /** The OS version, for the recording's header and the problems engine. */
   osVersion?: string
+  /**
+   * Which device it runs on, so a relay or a CI run tells two apps apart. Only a simulator's or an
+   * emulator's `name` and `id`; a physical device says its `model` (see InspectorDevice).
+   */
+  device?: InspectorDevice
   /** The project folder on the developer's machine: call-site paths resolve against it to open in an editor. */
   root?: string
   /** Defaults to the global WebSocket. */
@@ -124,6 +165,8 @@ export type ConnectInspectorOptions = {
    * reload between runs). Default: React Native's DevSettings.reload(), in development builds only.
    */
   reload?: (() => void) | null
+  /** The longest the hello waits for what the bridges measure about the device (the display), ms. Default 1500. */
+  factsTimeoutMs?: number
 }
 
 /** `debug` when React Native's __DEV__ is on, `release` when it is off, unknown elsewhere. */
@@ -156,21 +199,42 @@ function devSettings(): DevSettingsModule | null {
   }
 }
 
+/** How long a reload through Expo may take before DevSettings is tried: a reload ends this JavaScript. */
+export const RELOAD_FALLBACK_MS = 1500
+
 /**
  * A reload in a development build: Expo's reloadAppAsync where Expo runs (in Expo Go, React Native's
  * own DevSettings module restarts JavaScript without Expo's native modules), else DevSettings.reload().
- * Null where there is neither (release builds, Node).
+ * Expo's can do nothing at all: on Android it returns at once when the activity is not a ReactActivity
+ * (Expo Go's is not). So when it fails, or this JavaScript is still running a moment later, DevSettings
+ * reloads instead. Null where there is neither (release builds, Node).
  */
 function defaultReload(): (() => void) | null {
   const g = globalThis as NativeGlobals
   if (g.__DEV__ !== true) return null
-  if (typeof g.expo?.reloadAppAsync === 'function') return () => void g.expo!.reloadAppAsync!('keyframer-inspect').catch(() => {})
-  if (!devSettings()) return null
-  return () => {
+  const viaDevSettings = () => {
     const m = devSettings()
     if (m?.reloadWithReason) m.reloadWithReason('keyframer-inspect')
     else m?.reload?.()
   }
+  if (typeof g.expo?.reloadAppAsync === 'function') {
+    return () => {
+      let fellBack = false
+      const fallBack = () => {
+        if (fellBack) return
+        fellBack = true
+        clearTimeout(timer)
+        viaDevSettings()
+      }
+      const timer = setTimeout(fallBack, RELOAD_FALLBACK_MS)
+      try {
+        void g.expo!.reloadAppAsync!('keyframer-inspect').catch(fallBack)
+      } catch {
+        fallBack()
+      }
+    }
+  }
+  return devSettings() ? viaDevSettings : null
 }
 
 /** react-native-view-shot's captureScreen, as far as the inspector uses it. */
@@ -237,9 +301,14 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   let markers: InspectorMarker[] = []
   let tasks: InspectorTask[] = []
   let work: InspectorUiWork[] = []
-  // What is being recorded (declared before the inspector installs: it replays signals into enqueue).
+  // Who records what (declared before the inspector installs: it replays signals into enqueue). Each
+  // editor's recorder (`record`'s `recorder`; '' for editors that send none, which share it) has its
+  // ids, or `*`: every value, also ones that mount meanwhile. The app records while any recorder does,
+  // and samples the union, so one editor stopping does not stop another's recording.
+  const recorders = new Map<string, Set<string> | '*'>()
   const recording = new Set<string>()
   let recordAll = false
+  const isRecording = () => recorders.size > 0
   // Signal and style sites are reported once; an editor that joins later still needs them.
   const catalog = new Map<string, InspectorEvent>()
   const enqueue = (e: InspectorEvent) => {
@@ -247,18 +316,26 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       e = { ...e, args: sanitizeArgs(e.args) }
       // While recording, place it on the recording's clock and keep where it was called from. Called
       // synchronously from the hook, so the stack still holds the app code that started it.
-      if (recording.size) {
+      if (isRecording()) {
         e.t = Math.round(now() - recordStart)
         if (e.thread !== 'ui') e.stack = captureStack()
       }
     } else if (e.kind === 'unsignal') {
       // Gone (its screen unmounted): a panel that connects later is not told about it.
       catalog.delete(`signal:${e.id}`)
+      // While recording, when: the value's history ends here (a remount starts a new one).
+      if (isRecording()) {
+        e = { ...e, t: Math.round(now() - recordStart) }
+        valueMoved(e.id, e.t!)
+      }
     } else {
-      catalog.set(`${e.kind}:${e.site.id}`, e)
+      // As reported: a panel that connects later gets no recording time with it.
+      catalog.set(e.kind === 'renderHint' ? `renderHint:${e.id}:${e.hint}` : `${e.kind}:${e.site.id}`, e)
       // A shared value reported while recording is new, or replaces one (a screen re-mounted: same
       // call site, new value): sampling follows it. Recording everything, a new one joins.
-      if (e.kind === 'signal' && recording.size) {
+      if (e.kind === 'signal' && isRecording()) {
+        e = { ...e, t: Math.round(now() - recordStart) }
+        valueMoved(e.site.id, e.t!)
         if (recordAll) recording.add(e.site.id)
         if (recording.has(e.site.id)) restartSampling()
       }
@@ -277,7 +354,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       report: (site, args) => inspector.report(site, sanitizeArgs(args)),
       overrides: inspector.getOverrides(),
       reportFrames: (stats, ds, at) => {
-        if (!recording.size) return
+        if (!isRecording()) return
         bridgeOffset = Math.min(bridgeOffset, now() - recordStart - at)
         const o = bridgeOffset
         for (const st of stats) frames.push({ ...st, t: Math.round(st.t + o) })
@@ -291,13 +368,16 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   let backoff = 500
   let editors = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  // The socket the hello went out on: nothing else goes before it. And what it said about the device.
+  let greeted: SocketLike | null = null
+  let said: AppFacts = {}
 
   const sendRaw = (msg: unknown) => {
     if (socket && socket.readyState === OPEN) socket.send(JSON.stringify(msg))
   }
 
   const flush = () => {
-    if (!socket || socket.readyState !== OPEN) return
+    if (!socket || socket.readyState !== OPEN || greeted !== socket) return
     if (queue.length) {
       sendRaw({ type: 'events', events: queue })
       queue = []
@@ -347,27 +427,43 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   // by the smallest offset seen; a JS timer otherwise.
   const uiSampler = bridges.find((b) => b.sampleValues)
   let stopUiSampling: (() => void) | null = null
-  let sampleOffset = Infinity
+  // When each value last mounted or went away while recording, and the samplers whose rows may still
+  // arrive: a sampler reads the shared values it started with, so once an id is re-registered (a
+  // remount) or gone, its rows for that id are an old instance's and are not recorded under the id.
+  const movedAt = new Map<string, number>()
+  const samplers = new Set<SamplerWindow>()
+  const valueMoved = (id: string, t: number) => {
+    movedAt.set(id, t)
+    for (const w of samplers) if (w.ids.includes(id) && !w.until.has(id)) w.until.set(id, t)
+  }
   const startUiSampling = () => {
     stopUiSampling?.()
     stopUiSampling = null
     const ids = [...recording].filter((id) => inspector.signals.has(id))
     if (!ids.length || !uiSampler?.sampleValues) return
-    sampleOffset = Infinity
-    stopUiSampling = uiSampler.sampleValues(
+    const w = samplerWindow(ids, movedAt)
+    samplers.add(w)
+    let offset = Infinity
+    const stop = uiSampler.sampleValues(
       ids.map((id) => inspector.signals.get(id)),
       (rows) => {
         const t = now() - recordStart
-        for (const row of rows) sampleOffset = Math.min(sampleOffset, t - row[0]!)
+        for (const row of rows) offset = Math.min(offset, t - row[0]!)
         for (const row of rows) {
-          const at = Math.round(row[0]! + sampleOffset)
+          const at = Math.round(row[0]! + offset)
           for (let i = 0; i < ids.length; i++) {
             const v = row[i + 1]!
-            if (Number.isFinite(v)) samples.push({ id: ids[i]!, t: at, v })
+            if (Number.isFinite(v) && inSamplerWindow(w, i, at)) samples.push({ id: ids[i]!, t: at, v })
           }
         }
       },
     )
+    stopUiSampling = () => {
+      stop()
+      // Rows already on their way from before the stop still count; later ones are the next sampler's.
+      closeSamplerWindow(w, Math.round(now() - recordStart))
+      samplers.delete(w)
+    }
   }
   // New shared values join a running sampler: restarted once per tick, however many mount together.
   let restartQueued = false
@@ -376,7 +472,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
     restartQueued = true
     setTimeout(() => {
       restartQueued = false
-      if (recording.size) startUiSampling()
+      if (isRecording()) startUiSampling()
     }, 0)
   }
   // The JS thread's frames, measured while recording; the UI thread's come from the bridges.
@@ -420,7 +516,10 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
           (m) => {
             if (markers.length < MAX_QUEUED_EVENTS) markers.push(m)
           },
+          said,
         ) ?? null
+      // Without a bridge that watches (node, tests), the speed is marked here.
+      if (!withMarkers && timeScale() !== 1) markers.push({ kind: 'time', t: 0, scale: timeScale() })
       // JS tasks (handlers, effects, timers), timed by the wall clock: mapped by how long ago they ended.
       unwatchTasks = watchTasks(({ end, ...task }) => {
         if (tasks.length < MAX_QUEUED_EVENTS) tasks.push({ ...task, t: Math.round(now() - recordStart - (Date.now() - end)) })
@@ -496,31 +595,62 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
     }
     for (const b of bridges) b.measureFrames?.(on)
   }
-  const setRecording = (ids: string[], on: boolean) => {
-    const was = recording.size > 0
-    const all = ids.includes('*')
-    if (on) {
-      if (recording.size === 0) recordStart = now()
-      if (all) recordAll = true
-      for (const id of all ? inspector.signals.keys() : ids) recording.add(id)
-    } else if (all) {
-      recordAll = false
-      recording.clear()
-    } else for (const id of ids) recording.delete(id)
+  /** What the recorders ask for, together: every mounted value when one records everything. */
+  const deriveRecording = () => {
+    recordAll = [...recorders.values()].includes('*')
+    recording.clear()
+    if (recordAll) for (const id of inspector.signals.keys()) recording.add(id)
+    for (const ids of recorders.values()) if (ids !== '*') for (const id of ids) recording.add(id)
+  }
+  /** After the recorders changed: sampling, frames and the recording's clock follow them. */
+  const recordersChanged = (was: boolean) => {
+    const on = isRecording()
+    // A recording starts when the first recorder does: its clock, and which values mounted when.
+    if (on && !was) {
+      recordStart = now()
+      movedAt.clear()
+    }
+    deriveRecording()
     if (uiSampler) {
-      if (recording.size) startUiSampling()
+      if (on) startUiSampling()
       else {
         stopUiSampling?.()
         stopUiSampling = null
       }
     } else {
-      if (recording.size && !sampleTimer) sampleTimer = setInterval(sampleOnce, sampleMs)
-      if (!recording.size && sampleTimer) {
+      if (on && !sampleTimer) sampleTimer = setInterval(sampleOnce, sampleMs)
+      if (!on && sampleTimer) {
         clearInterval(sampleTimer)
         sampleTimer = null
       }
     }
-    if (was !== recording.size > 0) measureFrames(recording.size > 0)
+    if (was !== on) measureFrames(on)
+    // What the runtime saw about how views are drawn is reported once per JavaScript session: each
+    // recording gets it again, so a recording made after another (a warm-up run) still has it.
+    if (on && !was) for (const e of catalog.values()) if (e.kind === 'renderHint') queue.push(e)
+  }
+  const setRecording = (ids: string[], on: boolean, recorder = '') => {
+    const was = isRecording()
+    const all = ids.includes('*')
+    const mine = recorders.get(recorder)
+    if (on) {
+      if (all) recorders.set(recorder, '*')
+      else if (mine !== '*') recorders.set(recorder, new Set([...(mine ?? []), ...ids]))
+    } else if (mine !== undefined) {
+      // Only this recorder's ids: another editor's recording goes on.
+      if (all) recorders.delete(recorder)
+      else if (mine !== '*') {
+        for (const id of ids) mine.delete(id)
+        if (!mine.size) recorders.delete(recorder)
+      }
+    }
+    recordersChanged(was)
+  }
+  /** Every recorder stops (no editor is left to receive what they record). */
+  const stopRecorders = () => {
+    if (!isRecording()) return
+    recorders.clear()
+    recordersChanged(true)
   }
 
   // ── playback: write recorded samples back in time order ───────────────
@@ -603,6 +733,38 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
     })
   }
 
+  // ── time: the speed the app's animations run at ─────────────────────────
+  const clockBridge = bridges.find((b) => b.setTime)
+  const setSpeed = (scale: number, step = 0) => {
+    if (!clockBridge?.setTime?.(scale, step)) return
+    if (scale !== timeScale()) {
+      emitTimeScale(scale)
+      // A bridge that watches markers marks it (for a recording on the device too); without one, here.
+      if (isRecording() && !bridges.some((b) => b.watchMarkers) && markers.length < MAX_QUEUED_EVENTS) {
+        markers.push({ kind: 'time', t: Math.round(now() - recordStart), scale })
+      }
+    }
+    // Each step while paused is marked where it happened (after the pause it may come with): the
+    // analysis moves the app's clock on there.
+    if (step > 0 && isRecording() && markers.length < MAX_QUEUED_EVENTS) {
+      markers.push({ kind: 'time', t: Math.round(now() - recordStart), scale: 0, step })
+    }
+  }
+  /** Back to normal speed: nobody is left to see the app slowed or paused, or to resume it. */
+  const normalSpeed = () => {
+    if (timeScale() === 1) return
+    setSpeed(1)
+    // Said, so a relay or an editor still listening does not keep showing the old speed: at once while
+    // the connection is open (the last editor left, or it is disposed), else right after the next hello
+    // (the connection dropped).
+    if (socket && greeted === socket) sendRaw({ type: 'time', scale: timeScale() })
+    else timeDue = true
+  }
+  // An editor that joined before the hello went out gets the catalog right after it, and a `time`
+  // asked before it is answered right after it.
+  let catalogDue = false
+  let timeDue = false
+
   const onMessage = (data: unknown) => {
     if (typeof data !== 'string' || data === PONG) return
     let msg: InspectorEditorMessage | InspectorPresenceMessage
@@ -612,6 +774,16 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       return
     }
     switch (msg.type) {
+      case 'time': {
+        // The rules every SDK shares (clock.ts): an invalid scale changes nothing, a step only counts
+        // while paused.
+        const scale = clampScale(msg.scale)
+        if (scale !== null) setSpeed(scale, clampStep(msg.step, scale))
+        // Answered every time, with the speed now (1 where the app cannot change it).
+        if (greeted === socket) sendRaw({ type: 'time', scale: timeScale() })
+        else timeDue = true
+        break
+      }
       case 'overrides':
         inspector.setOverrides(msg.overrides ?? {})
         for (const b of bridges) b.setOverrides?.(msg.overrides ?? {})
@@ -623,7 +795,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         reload?.()
         break
       case 'record':
-        setRecording(msg.signalIds ?? [], !!msg.on)
+        setRecording(msg.signalIds ?? [], !!msg.on, typeof msg.recorder === 'string' ? msg.recorder : '')
         break
       case 'playback':
         playback(msg.samples ?? [], msg.routes ?? [])
@@ -635,13 +807,69 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         void runScenario(msg.name, now).then((r) => sendRaw({ type: 'scenarioDone', name: msg.name, ...r }))
         break
       case 'presence':
-        // A new editor missed the one-off signal and style reports: send it the catalog.
-        if (msg.editors > editors && catalog.size) {
-          sendRaw({ type: 'events', events: [...catalog.values()] })
+        if (msg.editors > editors) {
+          if (greeted === socket) {
+            // Editors that join a room with no other editor in it never heard the hello (it went to
+            // nobody, or to editors that have left): it goes again, for them alone. With other editors
+            // still there it does not: to them a second hello is the app restarting.
+            if (editors === 0) sendRaw(helloMessage(said))
+            // A new editor missed the one-off signal and style reports: send it the catalog. (An app is
+            // at normal speed with no editor in the room, so a lone editor needs no `time` after it.)
+            if (catalog.size) sendRaw({ type: 'events', events: [...catalog.values()] })
+          } else if (catalog.size) catalogDue = true
+        }
+        // The last editor left: animations go back to normal speed, and no recorder is left.
+        if (msg.editors === 0 && editors > 0) {
+          normalSpeed()
+          stopRecorders()
         }
         editors = msg.editors
         break
     }
+  }
+
+  /** What the app says when it connects: who it is, what it can do, what it measured about the device. */
+  const helloMessage = (facts: AppFacts) => {
+    const capabilities: InspectorCapability[] = ['playback', 'overrides', 'replay', 'scenarios', 'recordings', ...(opts.captureScreen ? ['capture'] : []), ...(reload ? ['reload'] : [])]
+    for (const c of facts.capabilities ?? []) if (!capabilities.includes(c)) capabilities.push(c)
+    return {
+      type: 'hello',
+      role: 'app',
+      app: opts.app ?? 'app',
+      platform: opts.platform ?? 'unknown',
+      capture: !!opts.captureScreen,
+      ...(opts.screen ? { screen: opts.screen } : {}),
+      scenarios: scenarioNames(),
+      protocol: PROTOCOL,
+      sdk: SDK,
+      framework: 'react-native',
+      ...(opts.osVersion ? { osVersion: opts.osVersion } : {}),
+      ...(opts.device ? { device: opts.device } : {}),
+      ...(build ? { build } : {}),
+      ...(opts.root ? { root: opts.root } : {}),
+      threads: REACT_NATIVE_THREADS,
+      capabilities,
+      ...(facts.display ? { display: facts.display } : {}),
+      ...(facts.accessibility ? { accessibility: facts.accessibility } : {}),
+    }
+  }
+
+  /** Merges what the bridges measured, giving up on any that take longer than `factsTimeoutMs`. */
+  const factsTimeoutMs = opts.factsTimeoutMs ?? 1500
+  const gatherFacts = (from: InspectorBridge[]): Promise<AppFacts> => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const each = Promise.all(from.map((b) => b.facts!().catch(() => ({}) as AppFacts)))
+    const late = new Promise<AppFacts[]>((resolve) => (timer = setTimeout(() => resolve([]), factsTimeoutMs)))
+    return Promise.race([each, late]).then((all) => {
+      if (timer) clearTimeout(timer)
+      const out: AppFacts = {}
+      for (const f of all) {
+        if (f.display) out.display = f.display
+        if (f.accessibility) out.accessibility = f.accessibility
+        if (f.capabilities?.length) out.capabilities = [...new Set([...(out.capabilities ?? []), ...f.capabilities])]
+      }
+      return out
+    })
   }
 
   let heartbeat: ReturnType<typeof setInterval> | null = null
@@ -654,33 +882,34 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       if (heartbeat) clearInterval(heartbeat)
       heartbeat = null
       if (socket === s) socket = null
+      // Whoever slowed the app down cannot see it or resume it any more, and no editor is left to get
+      // what a recorder asked for: the next connection starts at normal speed, recording nothing.
+      normalSpeed()
+      stopRecorders()
       if (disposed) return
       reconnectTimer = setTimeout(connect, backoff)
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
     }
+    const hello = (facts: AppFacts) => {
+      if (socket !== s || s.readyState !== OPEN || greeted === s) return
+      said = facts
+      s.send(JSON.stringify(helloMessage(facts)))
+      greeted = s
+      flush()
+      if (catalogDue && catalog.size) sendRaw({ type: 'events', events: [...catalog.values()] })
+      catalogDue = false
+      // A hello means normal speed: an app still slowed or paused says so right after it.
+      if (timeDue || timeScale() !== 1) sendRaw({ type: 'time', scale: timeScale() })
+      timeDue = false
+    }
     s.onopen = () => {
       backoff = 500
       lastHeard = now()
-      s.send(
-        JSON.stringify({
-          type: 'hello',
-          role: 'app',
-          app: opts.app ?? 'app',
-          platform: opts.platform ?? 'unknown',
-          capture: !!opts.captureScreen,
-          ...(opts.screen ? { screen: opts.screen } : {}),
-          scenarios: scenarioNames(),
-          protocol: PROTOCOL,
-          sdk: SDK,
-          framework: 'react-native',
-          ...(opts.osVersion ? { osVersion: opts.osVersion } : {}),
-          ...(build ? { build } : {}),
-          ...(opts.root ? { root: opts.root } : {}),
-          threads: REACT_NATIVE_THREADS,
-          capabilities: ['playback', 'overrides', 'replay', 'scenarios', 'recordings', ...(opts.captureScreen ? ['capture'] : []), ...(reload ? ['reload'] : [])],
-        }),
-      )
-      flush()
+      // The hello carries what the bridges measure about the device (the display's refresh rate takes
+      // a moment of frames): it waits for them, and nothing else goes out before it.
+      const measuring = bridges.filter((b) => b.facts)
+      if (measuring.length) void gatherFacts(measuring).then(hello)
+      else hello({})
       heartbeat = setInterval(() => {
         if (now() - lastHeard > HEARTBEAT_TIMEOUT_MS) {
           // Silent for too long: the room dropped us without a close. Reconnect without waiting.
@@ -708,6 +937,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
 
   return () => {
     disposed = true
+    normalSpeed()
     if (live.__KF_CONNECTION__ === connection) delete live.__KF_CONNECTION__
     unwatchScenarios()
     clearInterval(flushTimer)

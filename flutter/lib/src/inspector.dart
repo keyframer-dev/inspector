@@ -6,6 +6,7 @@ import 'controller.dart';
 import 'flutter_host.dart';
 import 'runtime.dart';
 import 'transport.dart';
+import 'widget_site.dart';
 
 /// On in debug and profile builds. A release build connects only when built with
 /// `--dart-define=KEYFRAMER_INSPECTOR=true` or when `enabled: true` is passed.
@@ -40,9 +41,20 @@ KfInspectorConnection connectKeyframerInspector({
     app: app,
     platform: os,
     osVersion: currentOsVersion(),
+    // Which simulator, emulator or device model: how a relay or a CI run tells apps apart.
+    device: currentDevice(),
     host: FlutterKfHost(boundary: captureBoundary),
-    connector: connector ?? (u) => IoKfSocket.connect(u, pingInterval: client.pingInterval),
+    connector: connector ?? (u) => connectRelaySocket(u, pingInterval: client.pingInterval),
   )..start();
+  // A debug build without widget creation tracking (`flutter build ios --debug`) reports no implicit
+  // animations or Hero flights: say so where the developer looks, as the hello does (no `widget-sites`).
+  if (kDebugMode && !kfWidgetCreationTracked) {
+    debugPrint(
+      'keyframer_inspector: widget creation tracking is off in this build, so implicit animations '
+      '(AnimatedContainer, AnimatedOpacity, ...) and Hero flights are not reported. Run the app with flutter run '
+      '(a flutter build ios --debug app has no tracking).',
+    );
+  }
   return KfInspectorConnection._(client);
 }
 

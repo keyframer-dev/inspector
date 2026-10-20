@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (glitch lab): pulse gets withTiming(1.25, { duration: 400 }) from JS, then JS is blocked for
+# 200 ms. The timing runs on the UI thread, so it keeps its 400 ms (within 2% at 360 ms).
+name: qa glitch animation then block
+flow:
+  scenario: "glitch lab: start an animation, then block JS"
+record:
+  settle: 900ms
+expect:
+  - value: pulse
+    duration: 385ms..425ms
+    settle: 345ms..380ms
+    overshoot: < 1%
+  - frames: { js: "> 8" }
+  - none: [reduce-motion, two-writers, jump, error]

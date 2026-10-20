@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 val relayHost = (findProperty("keyframer.host") as String?).orEmpty()
@@ -23,6 +24,7 @@ android {
 
     buildFeatures {
         buildConfig = true
+        compose = true
     }
 
     compileOptions {
@@ -41,4 +43,9 @@ dependencies {
     debugImplementation(project(":keyframer-inspector"))
     // Release builds link the no-op: the same API, nothing running, no OkHttp.
     releaseImplementation(project(":keyframer-inspector-noop"))
+    // The Compose screen: tracked animations in debug, Compose's own in release.
+    debugImplementation(project(":keyframer-inspector-compose"))
+    releaseImplementation(project(":keyframer-inspector-compose-noop"))
+    implementation("androidx.activity:activity-compose:1.10.1")
+    implementation("androidx.compose.foundation:foundation:1.7.6")
 }

@@ -1,0 +1,17 @@
+{
+  "enabled": true,
+  "sampleRate": 0.3,
+  "boostUntil": "2026-10-21T09:00:00.000Z",
+  "minSdk": {
+    "react-native": "0.0.1",
+    "ios": "0.0.1",
+    "android": "0.0.1",
+    "flutter": "0.0.1"
+  },
+  "collect": {
+    "reduceMotion": false,
+    "deviceModel": true,
+    "development": false
+  },
+  "ttlSec": 86400
+}

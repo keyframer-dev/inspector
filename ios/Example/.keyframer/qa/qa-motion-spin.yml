@@ -1,0 +1,11 @@
+# QA regression check, bug 6 (iOS rotation read through atan2 wraps at ±π): a 0 -> 2π spin over
+# 0.8 s easeInEaseOut peaks near 13 rad/s. Today the value reads 0 -> 3.06 -> -3.00 -> 0 and peak
+# velocity 177/s -> FAILS until fixed.
+name: qa motion spin
+flow: { scenario: spin }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: card.transform.rotation.z
+    duration: 700ms..900ms
+    velocity: < 30/s
+  - none: [jump]

@@ -50,6 +50,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late final _drag = KfAnimationController(vsync: this, lowerBound: -1, upperBound: 1, value: 0, name: 'drag');
   final _cardKey = GlobalKey();
   final List<void Function()> _unregister = [];
+  // An implicit animation: the inspector finds AnimatedContainer and friends while it records.
+  bool _expanded = false;
 
   @override
   void initState() {
@@ -57,8 +59,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _entrance.forward();
     _pulse.repeat(reverse: true);
     _unregister
-      ..add(registerReplay(() => _entrance.forward(from: 0)))
+      ..add(registerReplay(_replay))
       ..add(registerScenario('drag card', _dragScenario))
+      ..add(
+        registerScenario('expand', () async {
+          setState(() => _expanded = !_expanded);
+          await Future<void>.delayed(const Duration(milliseconds: 600));
+        }),
+      )
       ..add(
         registerScenario('open details', () async {
           unawaited(navigatorKey.currentState!.pushNamed('/details', arguments: {'id': 7}));
@@ -96,7 +104,11 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     final box = _cardKey.currentContext!.findRenderObject() as RenderBox;
     final center = box.localToGlobal(box.size.center(Offset.zero));
     const pointer = 4242;
-    Duration stamp() => Duration(microseconds: Timeline.now);
+    // On the engine's clock from where the drag starts, counted by a stopwatch: on the web Timeline.now
+    // does not move between events, so a drag stamped with it would read as one jump.
+    final start = Timeline.now;
+    final clock = Stopwatch()..start();
+    Duration stamp() => Duration(microseconds: start + clock.elapsedMicroseconds);
     void send(PointerEvent e) => GestureBinding.instance.handlePointerEvent(e);
     send(PointerDownEvent(pointer: pointer, position: center, timeStamp: stamp()));
     var at = center;
@@ -118,6 +130,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          // An Opacity rebuilt every frame: the inspector reports it as a render hint ("opacity-widget");
+          // FadeTransition(opacity: entrance) would not rebuild or repaint.
           AnimatedBuilder(
             animation: entrance,
             builder:
@@ -164,13 +178,46 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ),
           ),
           const SizedBox(height: 32),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pushNamed('/details', arguments: {'id': 7}),
-            child: const Text('Open details'),
+          GestureDetector(
+            onTap: () => setState(() => _expanded = !_expanded),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOutBack,
+              height: _expanded ? 140 : 72,
+              decoration: BoxDecoration(
+                color: _expanded ? const Color(0xFFE5484D) : const Color(0xFF6E56CF),
+                borderRadius: BorderRadius.circular(_expanded ? 28 : 12),
+              ),
+              alignment: Alignment.center,
+              child: AnimatedOpacity(
+                duration: const Duration(milliseconds: 300),
+                opacity: _expanded ? 1 : 0.6,
+                child: const Text('Tap me: implicit animations', style: TextStyle(color: Colors.white)),
+              ),
+            ),
+          ),
+          const SizedBox(height: 32),
+          Row(
+            children: [
+              // Flies to the details screen's header (a Hero flight).
+              const Hero(tag: 'badge', child: CircleAvatar(radius: 18, child: Icon(Icons.bar_chart, size: 18))),
+              const SizedBox(width: 16),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pushNamed('/details', arguments: {'id': 7}),
+                child: const Text('Open details'),
+              ),
+            ],
           ),
         ],
       ),
     );
+  }
+
+  /// A clean state for each run: back on this screen (a scenario cut short can leave details open), then
+  /// the entrance again.
+  void _replay() {
+    navigatorKey.currentState?.popUntil((route) => route.isFirst);
+    _entrance.forward(from: 0);
   }
 }
 
@@ -182,7 +229,8 @@ class DetailsScreen extends StatefulWidget {
 }
 
 class _DetailsScreenState extends State<DetailsScreen> with SingleTickerProviderStateMixin {
-  late final _bars = KfAnimationController(vsync: this, name: 'bars');
+  // Room above 1: easeOutBack overshoots, and a controller clamps its value to its bounds.
+  late final _bars = KfAnimationController(vsync: this, upperBound: 1.2, name: 'bars');
 
   @override
   void initState() {
@@ -200,7 +248,15 @@ class _DetailsScreenState extends State<DetailsScreen> with SingleTickerProvider
   Widget build(BuildContext context) {
     const heights = [0.4, 0.75, 0.55, 1.0, 0.65];
     return Scaffold(
-      appBar: AppBar(title: const Text('Details')),
+      appBar: AppBar(
+        title: const Row(
+          children: [
+            Hero(tag: 'badge', child: CircleAvatar(radius: 14, child: Icon(Icons.bar_chart, size: 14))),
+            SizedBox(width: 12),
+            Text('Details'),
+          ],
+        ),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(24),
         child: AnimatedBuilder(

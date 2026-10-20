@@ -25,7 +25,7 @@
  * plugin, which has to run last.
  */
 
-import type { NodePath, PluginObj, PluginPass, types as BabelTypes } from '@babel/core'
+import type { NodePath, PluginObj, PluginPass, Visitor, types as BabelTypes } from '@babel/core'
 import type { InspectorCallSite, InspectorGestureSite, InspectorParam, InspectorSignalSite, InspectorStyleSite } from '../../protocol/inspector'
 
 export const ANIMATION_FNS = new Set([
@@ -249,6 +249,7 @@ function targetOf(path: NodePath): { target: string | null; prop: string | null 
   for (let p: NodePath | null = path.parentPath; p; child = p, p = p.parentPath) {
     if (p.isFunction() || p.isStatement()) break
     if (p.isObjectProperty() && prop === null) prop = keyName(p.node.key)
+    else if (p.isObjectProperty() && NESTED_STYLE_KEYS.has(keyName(p.node.key) ?? '')) prop = keyName(p.node.key)
     if (p.isCallExpression() && p.node.arguments[0] === child.node) {
       const callee = p.node.callee
       if (callee.type === 'MemberExpression' && !callee.computed && keyName(callee.property) === 'set') {
@@ -273,9 +274,13 @@ function numberOf(node: BabelTypes.Node): number | null {
   return null
 }
 
+/** Style keys whose value is an object of their own: a read inside one animates the outer key. */
+const NESTED_STYLE_KEYS = new Set(['shadowOffset', 'textShadowOffset'])
+
 /**
  * Inside a useAnimatedStyle worklet, every `x.value` read and the style key it ends up under:
- * `{ opacity: o.value, transform: [{ translateY: y.value }] }` → o → opacity, y → translateY.
+ * `{ opacity: o.value, transform: [{ translateY: y.value }] }` → o → opacity, y → translateY,
+ * `{ shadowOffset: { height: h.value } }` → h → shadowOffset (not the layout height).
  */
 export function styleLinks(worklet: NodePath): Array<{ signal: string; prop: string }> {
   const links: Array<{ signal: string; prop: string }> = []
@@ -286,7 +291,10 @@ export function styleLinks(worklet: NodePath): Array<{ signal: string; prop: str
       if (node.computed || node.object.type !== 'Identifier' || keyName(node.property) !== 'value') return
       for (let p: NodePath | null = member.parentPath; p && p !== worklet; p = p.parentPath) {
         if (!p.isObjectProperty()) continue
-        const prop = keyName(p.node.key)
+        let prop = keyName(p.node.key)
+        const outer = p.parentPath?.parentPath
+        const outerKey = outer?.isObjectProperty() ? keyName(outer.node.key) : null
+        if (outerKey && NESTED_STYLE_KEYS.has(outerKey)) prop = outerKey
         if (!prop || prop === 'transform') continue
         const key = `${node.object.name}>${prop}`
         if (!seen.has(key)) {
@@ -392,71 +400,11 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
     return binding?.kind === 'module'
   }
 
-  return {
-    name: 'keyframer-inspector',
-    visitor: {
-      Program: {
-        enter(program, state) {
-          const file = (state.filename ?? '').replace(/\\/g, '/')
-          state.skip =
-            (!state.opts.includeNodeModules && file.includes('/node_modules/')) || /\/packages\/inspector\/(src|dist)\//.test(file)
-          state.animLocals = new Map()
-          state.svLocals = new Set()
-          state.gestureLocals = new Set()
-          state.gestureHelper = null
-          state.workletHookLocals = new Map()
-          state.uiRunnerLocals = new Set()
-          state.effectLocals = new Set()
-          state.reactLocals = new Set()
-          state.helpers = new Map()
-          state.styleLocals = new Set()
-          state.animHelper = null
-          state.signalHelper = null
-          state.styleHelper = null
-          state.layoutHelper = null
-          state.styleBindings = new Map()
-          state.wrapped = new WeakSet()
-          state.usesCss = /\b(animationName|transitionProperty|transitionDuration)\b/.test(state.file.code ?? '')
-          state.animatedLocals = new Set()
-          for (const stmt of program.node.body) {
-            if (stmt.type === 'ImportDeclaration' && stmt.importKind !== 'type' && (stmt.source.value === 'react' || stmt.source.value === WORKLETS)) {
-              for (const spec of stmt.specifiers) {
-                if (spec.type !== 'ImportSpecifier') {
-                  if (stmt.source.value === 'react') state.reactLocals.add(spec.local.name)
-                  continue
-                }
-                const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
-                if (stmt.source.value === 'react' && EFFECT_HOOKS.has(imported)) state.effectLocals.add(spec.local.name)
-                if (stmt.source.value === WORKLETS && UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
-              }
-            }
-            if (stmt.type === 'ImportDeclaration' && stmt.source.value === GESTURE_HANDLER && stmt.importKind !== 'type') {
-              for (const spec of stmt.specifiers) {
-                if (spec.type !== 'ImportSpecifier') continue
-                const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
-                if (imported === 'Gesture') state.gestureLocals.add(spec.local.name)
-              }
-            }
-            if (stmt.type !== 'ImportDeclaration' || stmt.source.value !== REANIMATED) continue
-            if (stmt.importKind === 'type') continue
-            for (const spec of stmt.specifiers) {
-              if (spec.type !== 'ImportSpecifier') {
-                state.animatedLocals.add(spec.local.name)
-                continue
-              }
-              const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
-              if (ANIMATION_FNS.has(imported)) state.animLocals.set(spec.local.name, imported)
-              if (imported === 'useSharedValue') state.svLocals.add(spec.local.name)
-              if (imported === 'useAnimatedStyle' || imported === 'useAnimatedProps') state.styleLocals.add(spec.local.name)
-              if (imported in WORKLET_HOOKS) state.workletHookLocals.set(spec.local.name, WORKLET_HOOKS[imported]!)
-              if (UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
-            }
-          }
-        },
-        exit(program, state) {
+  /** What a file gets once its calls are wrapped: the list of its components, and the helpers it calls. */
+  const finish = (program: NodePath<BabelTypes.Program>, state: State) => {
           // The app's own components, so render time in View / Text / navigators is charged to the
           // component of this app that rendered them.
-          if (!state.skip) {
+          {
             const names = componentNames(program.node)
             if (names.length) {
               program.pushContainer(
@@ -473,9 +421,9 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           if (state.layoutHelper) specifiers.push(t.importSpecifier(state.layoutHelper, t.identifier('__kfLayout')))
           if (state.gestureHelper) specifiers.push(t.importSpecifier(state.gestureHelper, t.identifier('__kfGesture')))
           if (specifiers.length) program.unshiftContainer('body', t.importDeclaration(specifiers, t.stringLiteral(RUNTIME_MODULE)))
-        },
-      },
+  }
 
+  const nodes: Visitor<State> = {
       // The element an animated style lands on reports where it is (`onLayout={__kfLayout(id, theirs)}`),
       // so an overlay can outline the view that moves. A no-op until something watches layouts.
       JSXOpeningElement(path, state) {
@@ -599,6 +547,13 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           }
         }
         if (!styleId) return
+        // Its static style is read once at runtime for what makes moving it costly (a shadow without a
+        // path on iOS). The same object goes through.
+        const viewStyle = jsxAttr(path.node, 'style')
+        const viewStyleValue = jsxValue(viewStyle)
+        if (viewStyle && viewStyleValue && !isHelperCall(viewStyleValue, '__kfViewStyle')) {
+          viewStyle.value = t.jsxExpressionContainer(t.callExpression(t.cloneNode(helper(state, path, '__kfViewStyle')), [viewStyleValue, t.stringLiteral(styleId)]))
+        }
         state.layoutHelper ??= path.scope.getProgramParent().generateUidIdentifier('kfLayout')
         const existing = path.node.attributes.find(
           (a): a is BabelTypes.JSXAttribute => a.type === 'JSXAttribute' && a.name.type === 'JSXIdentifier' && a.name.name === 'onLayout',
@@ -753,6 +708,78 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           state.wrapped.add(call)
           path.replaceWith(call)
         }
+      },
+  }
+
+  return {
+    name: 'keyframer-inspector',
+    visitor: {
+      Program: {
+        enter(program, state) {
+          const file = (state.filename ?? '').replace(/\\/g, '/')
+          state.skip =
+            (!state.opts.includeNodeModules && file.includes('/node_modules/')) || /\/packages\/inspector\/(src|dist)\//.test(file)
+          state.animLocals = new Map()
+          state.svLocals = new Set()
+          state.gestureLocals = new Set()
+          state.gestureHelper = null
+          state.workletHookLocals = new Map()
+          state.uiRunnerLocals = new Set()
+          state.effectLocals = new Set()
+          state.reactLocals = new Set()
+          state.helpers = new Map()
+          state.styleLocals = new Set()
+          state.animHelper = null
+          state.signalHelper = null
+          state.styleHelper = null
+          state.layoutHelper = null
+          state.styleBindings = new Map()
+          state.wrapped = new WeakSet()
+          state.usesCss = /\b(animationName|transitionProperty|transitionDuration)\b/.test(state.file.code ?? '')
+          state.animatedLocals = new Set()
+          for (const stmt of program.node.body) {
+            if (stmt.type === 'ImportDeclaration' && stmt.importKind !== 'type' && (stmt.source.value === 'react' || stmt.source.value === WORKLETS)) {
+              for (const spec of stmt.specifiers) {
+                if (spec.type !== 'ImportSpecifier') {
+                  if (stmt.source.value === 'react') state.reactLocals.add(spec.local.name)
+                  continue
+                }
+                const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
+                if (stmt.source.value === 'react' && EFFECT_HOOKS.has(imported)) state.effectLocals.add(spec.local.name)
+                if (stmt.source.value === WORKLETS && UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
+              }
+            }
+            if (stmt.type === 'ImportDeclaration' && stmt.source.value === GESTURE_HANDLER && stmt.importKind !== 'type') {
+              for (const spec of stmt.specifiers) {
+                if (spec.type !== 'ImportSpecifier') continue
+                const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
+                if (imported === 'Gesture') state.gestureLocals.add(spec.local.name)
+              }
+            }
+            if (stmt.type !== 'ImportDeclaration' || stmt.source.value !== REANIMATED) continue
+            if (stmt.importKind === 'type') continue
+            for (const spec of stmt.specifiers) {
+              if (spec.type !== 'ImportSpecifier') {
+                state.animatedLocals.add(spec.local.name)
+                continue
+              }
+              const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
+              if (ANIMATION_FNS.has(imported)) state.animLocals.set(spec.local.name, imported)
+              if (imported === 'useSharedValue') state.svLocals.add(spec.local.name)
+              if (imported === 'useAnimatedStyle' || imported === 'useAnimatedProps') state.styleLocals.add(spec.local.name)
+              if (imported in WORKLET_HOOKS) state.workletHookLocals.set(spec.local.name, WORKLET_HOOKS[imported]!)
+              if (UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
+            }
+          }
+          if (state.skip) return
+          // Everything in one pass, here, before the plugins after this one see the file:
+          // react-native-worklets/plugin copies each worklet's code when it reaches it, so the calls in
+          // a worklet must be wrapped, and the helpers they call imported, by then.
+          program.traverse(nodes, state)
+          finish(program, state)
+          // The imports are new bindings: the worklets plugin looks them up to capture them.
+          program.scope.crawl()
+        },
       },
     },
   }

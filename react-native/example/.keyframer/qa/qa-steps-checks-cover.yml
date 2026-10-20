@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: a screen pushed over the motion checks and closed again (back), from outside. The spinner
+# (app/checks.tsx:62) keeps looping underneath: unseen is expected; the pulses and the glow stop while
+# covered (useIsFocused).
+name: qa steps checks cover
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/checks
+    - wait: { id: checks-cover }
+      timeout: 15s
+    - tap: checks-cover
+    - wait: 1500ms
+    - back
+    - wait: 800ms
+expect:
+  - none: [reduce-motion, two-writers, error]

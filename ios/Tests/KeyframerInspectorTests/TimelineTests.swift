@@ -111,6 +111,147 @@ final class TimelineTests: XCTestCase {
         XCTAssertTrue(pins.isEmpty, "a scroll view is scrolled, not pinned")
     }
 
+    // MARK: Time control
+
+    func testWindowClockSlowsPausesStepsAndHandsBack() throws {
+        let root = CALayer()
+        let child = CALayer()
+        root.addSublayer(child)
+        let clocks = WindowClocks()
+        let t0 = CACurrentMediaTime()
+        let local0 = child.convertTime(t0, from: nil)
+
+        clocks.set(scale: 0.25, keyWindow: root, now: t0)
+        XCTAssertEqual(root.speed, 0.25)
+        XCTAssertEqual(child.convertTime(t0, from: nil), local0, accuracy: 1e-6, "no jump")
+        XCTAssertEqual(child.convertTime(t0 + 4, from: nil) - local0, 1, accuracy: 1e-6)
+
+        clocks.set(scale: 0, keyWindow: root, now: t0 + 4)
+        XCTAssertEqual(root.speed, 0)
+        XCTAssertEqual(child.convertTime(t0 + 9, from: nil) - local0, 1, accuracy: 1e-6, "paused")
+        clocks.step(frames: 6, hz: 60, now: t0 + 9)
+        XCTAssertEqual(child.convertTime(t0 + 10, from: nil) - local0, 1.1, accuracy: 1e-6, "six frames of 60 Hz")
+
+        // 1x: running again from where it was, behind the real clock while something animates.
+        clocks.set(scale: 1, keyWindow: root, now: t0 + 10)
+        XCTAssertEqual(clocks.scale, 1)
+        XCTAssertEqual(root.speed, 1)
+        XCTAssertEqual(child.convertTime(t0 + 11, from: nil) - local0, 2.1, accuracy: 1e-6)
+        let spin = CABasicAnimation(keyPath: "transform.rotation.z")
+        spin.duration = 100
+        child.add(spin, forKey: "spin")
+        clocks.settle(now: t0 + 11)
+        XCTAssertNotEqual(root.timeOffset, 0, "still something running: not handed back yet")
+        child.removeAllAnimations()
+        clocks.settle(now: t0 + 12)
+        XCTAssertEqual(root.speed, 1)
+        XCTAssertEqual(root.timeOffset, 0)
+        XCTAssertEqual(root.beginTime, 0)
+    }
+
+    func testEditorLeavingRestoresAtOnce() {
+        let root = CALayer()
+        let clocks = WindowClocks()
+        clocks.set(scale: 0, keyWindow: root, now: CACurrentMediaTime())
+        XCTAssertEqual(root.speed, 0)
+        clocks.restore(now: CACurrentMediaTime())
+        XCTAssertEqual(clocks.scale, 1)
+        XCTAssertEqual(root.speed, 1)
+        XCTAssertEqual(root.timeOffset, 0)
+        XCTAssertEqual(root.beginTime, 0)
+    }
+
+    /// A recording made at half speed and then paused: a moment of it lands where the animation was
+    /// on the window's clock. Measuring the rate now (paused: 0) would put every moment in the same place.
+    func testScrubsARecordingMadeInSlowMotion() throws {
+        let root = CALayer()
+        let child = CALayer()
+        root.addSublayer(child)
+        let clocks = WindowClocks()
+        let t0 = CACurrentMediaTime() - 100
+        clocks.set(scale: 0.5, keyWindow: root, now: t0)
+        let anim = CABasicAnimation(keyPath: "position.x")
+        anim.fromValue = 0
+        anim.toValue = 100
+        anim.duration = 10
+        let begin = child.convertTime(t0, from: nil)
+        clocks.set(scale: 0, keyWindow: root, now: t0 + 2)
+
+        let scrubber = Scrubber()
+        let recorded = [RecordedAnimation(layer: child, anim: anim, begin: begin)]
+        scrubber.seek(toMedia: t0 + 1, live: [], recorded: recorded, context: { clocks.context(of: $0) })
+        let copy = try XCTUnwrap(child.animationKeys()?.compactMap { child.animation(forKey: $0) as? CABasicAnimation }.first { $0.toValue as? Int == 100 })
+        XCTAssertEqual(progress(child, copy), 0.05, accuracy: 1e-6, "1 s of media at half speed: 0.5 s in")
+        scrubber.seek(toMedia: t0 + 50, live: [], recorded: recorded, context: { clocks.context(of: $0) })
+        XCTAssertEqual(progress(child, copy), 0.1, accuracy: 1e-6, "paused at 1 s in")
+        scrubber.end()
+        clocks.restore(now: CACurrentMediaTime())
+    }
+
+    /// Delays read on the layer's own clock: UIKit's relative beginTime is the delay as written.
+    func testAnimationBeginsOnTheLayersClock() {
+        let layer = CALayer()
+        let now = CACurrentMediaTime()
+        let relative = CABasicAnimation(keyPath: "opacity")
+        relative.beginTime = 0.2
+        relative.setValue("relative", forKey: "beginTimeMode")
+        let r = Inspector.begin(of: relative, on: layer, now: now)
+        XCTAssertEqual(r.delay, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(r.local, layer.convertTime(now, from: nil) + 0.2, accuracy: 1e-9)
+        let plain = Inspector.begin(of: CABasicAnimation(keyPath: "opacity"), on: layer, now: now)
+        XCTAssertEqual(plain.delay, 0)
+        let absolute = CABasicAnimation(keyPath: "opacity")
+        absolute.beginTime = layer.convertTime(now, from: nil) + 0.5
+        XCTAssertEqual(Inspector.begin(of: absolute, on: layer, now: now).delay, 0.5, accuracy: 1e-9)
+    }
+
+    // MARK: Render hints that need views
+
+    func testABlurAboveTheAnimatedViewIsSeen() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        // A new window is hidden until shown.
+        window.isHidden = false
+        let card = UIView(frame: CGRect(x: 20, y: 100, width: 160, height: 160))
+        window.addSubview(card)
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+        blur.frame = CGRect(x: 0, y: 0, width: 400, height: 120)
+        window.addSubview(blur)
+        XCTAssertNotNil(LayerWatch.blur(over: card.layer, name: { _ in "card" }), "overlaps the card's top")
+        XCTAssertEqual(LayerWatch.window(of: card.layer), window.layer)
+        blur.frame.origin.y = 400
+        XCTAssertNil(LayerWatch.blur(over: card.layer, name: { _ in "card" }), "below it on screen")
+        blur.frame.origin.y = 0
+        blur.isHidden = true
+        XCTAssertNil(LayerWatch.blur(over: card.layer, name: { _ in "card" }))
+        // Behind the card (earlier in the list) it is not re-blurred by the card's motion.
+        blur.isHidden = false
+        window.sendSubviewToBack(blur)
+        XCTAssertNil(LayerWatch.blur(over: card.layer, name: { _ in "card" }))
+        // A blur that moves itself.
+        XCTAssertNotNil(LayerWatch.blur(over: blur.layer, name: { _ in "blur" }))
+    }
+
+    func testVisibilityChangesAreReportedOnce() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 400, height: 800))
+        // A new window is hidden until shown.
+        window.isHidden = false
+        let card = UIView(frame: CGRect(x: 20, y: 100, width: 160, height: 160))
+        window.addSubview(card)
+        let watch = LayerWatch()
+        XCTAssertNil(watch.visibilityChange(of: card.layer), "first seen visible: nothing to say")
+        card.frame.origin.x = 900
+        XCTAssertEqual(watch.visibilityChange(of: card.layer)?.reason, .offscreen)
+        XCTAssertTrue(watch.isOutOfSight(card.layer))
+        XCTAssertNil(watch.visibilityChange(of: card.layer), "no change")
+        card.removeFromSuperview()
+        XCTAssertEqual(watch.visibilityChange(of: card.layer)?.reason, .detached)
+        window.addSubview(card)
+        card.frame.origin.x = 20
+        let back = watch.visibilityChange(of: card.layer)
+        XCTAssertEqual(back?.visible, true)
+        XCTAssertNil(back?.reason)
+    }
+
     /// The swizzled add(_:forKey:) is a pass-through while no inspector runs.
     func testSwizzledAddPassesThrough() {
         Swizzles.installOnce()

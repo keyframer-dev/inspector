@@ -55,14 +55,21 @@ const _libraryPrefixes = [
   'org-dartlang-sdk:',
 ];
 
-/// A frame of the SDK, Flutter or the inspector itself: how the call got here, not who made it.
+/// A frame of the SDK, Flutter or the inspector itself: how the call got here, not who made it. A
+/// frame in compiled JavaScript or WebAssembly (a web build's `main.dart.js`) counts too: it names no
+/// source line, so it cannot be the app's call site, and sites fall back to the value's name.
 bool isLibraryFrame(KfStackFrame f) {
   for (final p in _libraryPrefixes) {
     if (f.uri.startsWith(p)) return true;
   }
-  // Web serves packages under /packages/<name>/.
-  return f.uri.contains('/packages/flutter/') || f.uri.contains('/packages/keyframer_inspector/');
+  if (_compiled.hasMatch(f.uri)) return true;
+  // A debug web build names the SDK's files dart-sdk/..., and serves packages under packages/<name>/.
+  return f.uri.startsWith('dart-sdk/') || f.uri.contains('/dart-sdk/') || _webLibrary.hasMatch(f.uri);
 }
+
+final _compiled = RegExp(r'\.(m?js|wasm)(\?.*)?$');
+final _webLibrary = RegExp(r'(^|/)packages/(flutter|keyframer_inspector|stack_trace)/');
+final _webOwn = RegExp(r'(^|/)packages/keyframer_inspector/');
 
 /// The first frame of the app's own code, or null (non-symbolic trace, or only library frames).
 KfStackFrame? appFrame(List<KfStackFrame> frames) {
@@ -80,6 +87,11 @@ String sourceFile(String uri, {String? appPackage, String? root}) {
   if (appPackage != null && uri.startsWith('package:$appPackage/')) {
     return 'lib/${uri.substring('package:$appPackage/'.length)}';
   }
+  // A debug web build serves the app's lib/ as packages/<appPackage>/.
+  if (appPackage != null && !uri.contains('://')) {
+    final i = uri.startsWith('packages/$appPackage/') ? 0 : uri.indexOf('/packages/$appPackage/');
+    if (i >= 0) return 'lib/${uri.substring(uri.indexOf('packages/$appPackage/', i) + 'packages/$appPackage/'.length)}';
+  }
   if (uri.startsWith('file://')) {
     final path = Uri.parse(uri).toFilePath();
     if (root != null && root.isNotEmpty) {
@@ -91,8 +103,11 @@ String sourceFile(String uri, {String? appPackage, String? root}) {
   return uri;
 }
 
-/// The widget or class a frame belongs to: `_CardState.initState.<anonymous closure>` is `Card`.
+/// The widget or class a frame belongs to: `_CardState.initState.<anonymous closure>` is `Card`. A bare
+/// method name, as a debug web build prints its frames (`initState`, `get [_entrance]`), names none.
 String? componentOf(String member) {
+  final bare = !member.contains('.') && !member.startsWith('new ');
+  if (bare && (member.contains(' ') || member.contains('[') || RegExp(r'^[a-z]').hasMatch(member))) return null;
   var head = member.split('.').first.trim();
   if (head.startsWith('new ')) head = head.substring(4);
   if (head.isEmpty || head.startsWith('<')) return null;
@@ -125,7 +140,7 @@ List<Map<String, Object?>> inspectorFrames(
 }) {
   final out = <Map<String, Object?>>[];
   for (final f in frames) {
-    if (f.uri.startsWith('package:keyframer_inspector/') || f.uri.contains('/packages/keyframer_inspector/')) continue;
+    if (f.uri.startsWith('package:keyframer_inspector/') || _webOwn.hasMatch(f.uri)) continue;
     out.add({
       'methodName': f.member,
       'file': sourceFile(f.uri, appPackage: appPackage, root: root),

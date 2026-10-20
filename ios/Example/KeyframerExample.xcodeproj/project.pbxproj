@@ -6,6 +6,7 @@
 	objectVersion = 77;
 	objects = {
 		7792B67B5E4D4DEFCC7C64A2 /* KeyframerInspector in Frameworks */ = {isa = PBXBuildFile; productRef = 93619460AD77576D4F86084C /* KeyframerInspector */; };
+		3A6B11647559B3414D80853D /* KeyframerInspectorSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = FB7D91BECB6EA14BC8CBF7E3 /* KeyframerInspectorSwiftUI */; };
 		D799BAE6088A90139B415FCC = {isa = PBXContainerItemProxy; containerPortal = 98F54143AB4E86B28C3AFEE0; proxyType = 1; remoteGlobalIDString = D0E2ABC3D80FE1067E8AD8ED; remoteInfo = KeyframerExample; };
 		FFC9B17DCDECF62F1E9FE02E = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = KeyframerExample.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		196FDFFB572229EC6B839E92 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = KeyframerExampleUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -14,7 +15,7 @@
 		DB8BF58B205897CD1F523426 = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
-			files = (7792B67B5E4D4DEFCC7C64A2,);
+			files = (7792B67B5E4D4DEFCC7C64A2, 3A6B11647559B3414D80853D,);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		CEAC53E8E08B3951EAB38666 = {
@@ -83,6 +84,7 @@
 			name = KeyframerExample;
 			packageProductDependencies = (
 				93619460AD77576D4F86084C,
+				FB7D91BECB6EA14BC8CBF7E3,
 			);
 			productName = KeyframerExample;
 			productReference = FFC9B17DCDECF62F1E9FE02E;
@@ -300,6 +302,10 @@
 		93619460AD77576D4F86084C /* KeyframerInspector */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = KeyframerInspector;
+		};
+		FB7D91BECB6EA14BC8CBF7E3 /* KeyframerInspectorSwiftUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = KeyframerInspectorSwiftUI;
 		};
 	};
 	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;

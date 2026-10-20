@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (slowed recording): qa steps sheet at a quarter of the speed, with its 1x waits and settle: ci runs
+# them on the app's clock, four times as long in real time (R6a). The
+# springs must measure as they do at 1x (about 1.9% overshoot, within 2% about 230 ms in, about
+# 4800 pt/s on the close), on the app's clock.
+name: qa slow steps sheet
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/sheet
+    - wait: { id: sheet-open-half }
+      timeout: 15s
+    - tap: sheet-open-half
+    - wait: 900ms
+    - tap: sheet-open-full
+    - wait: 900ms
+    - tap: sheet-close
+    - wait: 900ms
+record:
+  speed: 0.25
+  settle: 600ms
+expect:
+  - value: sheetY
+    overshoot: < 3%
+    settle: 180ms..320ms
+    duration: < 800ms
+    velocity: 4000/s..5600/s
+  - none: [reduce-motion, unseen, two-writers, jump, error]

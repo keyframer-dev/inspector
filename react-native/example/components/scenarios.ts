@@ -1,6 +1,7 @@
 import { fire, press, registerScenario, waitForTestId } from '@keyframerdev/inspector/devtools'
 import { router } from 'expo-router'
 import { emitBus } from './bus'
+import { bottomScreen } from './navigation'
 
 /**
  * Reproducible interactions for the inspector: an agent (keyframer-inspect mcp, run_scenario) or the
@@ -10,8 +11,24 @@ import { emitBus } from './bus'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function open(path: '/welcome' | '/feed' | '/sheet' | '/hold' | '/glitches' | '/carousel' | '/props', ready: string, prop?: string | null) {
-  router.navigate(path)
+/**
+ * Every run starts the same way, so runs compare: the home screen with this one opened on it, fresh.
+ * `navigate` would push another copy each time (React Navigation 7 reuses only the current screen).
+ */
+async function open(path: '/welcome' | '/feed' | '/sheet' | '/hold' | '/glitches' | '/carousel' | '/props' | '/checks', ready: string, prop?: string | null) {
+  if (router.canDismiss()) {
+    router.dismissAll()
+    // The screens closing are gone before the next one opens: none of them answers `ready`.
+    await wait(600)
+  }
+  // After a reload into another screen (a deep link, Expo restoring the last route), that screen is
+  // at the bottom of the stack, under every scenario: the home screen takes its place.
+  const bottom = bottomScreen()
+  if (bottom && bottom !== 'index') {
+    router.replace('/')
+    await wait(600)
+  }
+  router.push(path)
   await waitForTestId(ready, { prop })
   // Let the screen's entrance settle before the interaction starts.
   await wait(700)
@@ -20,8 +37,11 @@ async function open(path: '/welcome' | '/feed' | '/sheet' | '/hold' | '/glitches
 if (__DEV__) {
   registerScenario('welcome: replay the entrance', async () => {
     await open('/welcome', 'welcome-replay')
+    // The first entrance runs to its end before the replay remounts it (the badge's spring settles
+    // about 2.2 s after the screen mounts; open() waited 700 ms of that).
+    await wait(1700)
     press('welcome-replay')
-    await wait(1600)
+    await wait(2400)
   })
   registerScenario('sheet: open halfway, fully, then close', async () => {
     await open('/sheet', 'sheet-open-half')
@@ -93,5 +113,24 @@ if (__DEV__) {
     await open('/glitches', 'glitch-error')
     press('glitch-error')
     await wait(200)
+  })
+  // Motion checks: what works and is still a mistake. The first one needs Reduce Motion turned on.
+  registerScenario('motion checks: pulses with Reduce Motion on', async () => {
+    await open('/checks', 'checks-tug')
+    await wait(1500)
+  })
+  registerScenario('motion checks: a loop under another screen', async () => {
+    await open('/checks', 'checks-cover')
+    press('checks-cover')
+    await wait(1500)
+    router.back()
+    await wait(500)
+  })
+  registerScenario('motion checks: two animations on one value', async () => {
+    await open('/checks', 'checks-tug')
+    press('checks-tug')
+    await wait(900)
+    press('checks-tug')
+    await wait(900)
   })
 }

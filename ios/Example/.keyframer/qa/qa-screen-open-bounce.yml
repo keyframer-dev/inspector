@@ -1,0 +1,8 @@
+# QA regression check, bug 14: bounce opens no screen, so there is no screen-mount problem. Today any
+# dropped frame in the first 900 ms is "Opening the CardsViewController screen dropped frames"
+# (flaky: needs a dropped frame in that window).
+name: qa screen-open bounce
+flow: { scenario: bounce }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - none: [screen-mount]

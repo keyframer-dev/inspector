@@ -93,7 +93,18 @@ class ProtocolTest {
             """{"kind":"signal","site":{"id":"x","file":"f","line":1,"column":0,"component":null,"name":null,"writable":false}}""",
             Json.encode(Event.Signal(SignalSite("x", "f", 1, null, null, writable = false))),
         )
+        // With the property it animates, before `writable` as in the protocol.
+        assertEquals(
+            """{"kind":"signal","site":{"id":"x","file":"f","line":1,"column":0,"component":null,"name":"title.alpha","prop":"alpha","writable":false}}""",
+            Json.encode(Event.Signal(SignalSite("x", "f", 1, null, "title.alpha", writable = false, prop = "alpha"))),
+        )
         assertEquals("""{"kind":"unsignal","id":"x"}""", Json.encode(Event.Unsignal("x")))
+        // While recording: when it mounted and went away.
+        assertEquals("""{"kind":"unsignal","id":"x","t":900}""", Json.encode(Event.Unsignal("x", t = 900)))
+        assertEquals(
+            """{"kind":"signal","site":{"id":"x:time","file":"f","line":1,"column":0,"component":null,"name":"pulse time","kind":"time"},"t":120}""",
+            Json.encode(Event.Signal(SignalSite("x:time", "f", 1, null, "pulse time", kind = "time"), t = 120)),
+        )
     }
 
     @Test
@@ -125,6 +136,76 @@ class ProtocolTest {
         assertEquals("""{"type":"scenarios","names":["a","b"]}""", Json.encode(AppMessage.Scenarios(listOf("a", "b"))))
         assertEquals("""{"type":"scenarioDone","name":"a","ms":120}""", Json.encode(AppMessage.ScenarioDone("a", 120)))
         assertEquals("""{"type":"scenarioDone","name":"a","ms":3,"error":"boom"}""", Json.encode(AppMessage.ScenarioDone("a", 3, "boom")))
+    }
+
+    @Test
+    fun `hello with the display, the motion settings and the time capability`() {
+        assertEquals(
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":true,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.1.0"},"framework":"compose","capabilities":["capture","playback","overrides","replay","scenarios","time"],"display":{"hz":120,"adaptive":true},"accessibility":{"reduceMotion":false}}""",
+            Json.encode(
+                AppMessage.Hello(
+                    "a", "android", true, null, emptyList(),
+                    framework = "compose",
+                    capabilities = listOf("capture", "playback", "overrides", "replay", "scenarios", "time"),
+                    display = DisplayInfo(120.0, adaptive = true),
+                    accessibility = AccessibilityInfo(reduceMotion = false),
+                ),
+            ),
+        )
+        // A display with one rate leaves `adaptive` out.
+        assertEquals("""{"hz":60}""", Json.encode(DisplayInfo(60.0)))
+        assertEquals("""{"reduceMotion":true}""", Json.encode(AccessibilityInfo(true)))
+    }
+
+    @Test
+    fun `hello with the device`() {
+        assertEquals(
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.1.0"},"device":{"name":"Pixel 4 API 35","model":"sdk_gphone64_arm64","id":"Pixel_4_API_35","simulator":true}}""",
+            Json.encode(AppMessage.Hello("a", "android", false, null, emptyList(), device = DeviceInfo("Pixel 4 API 35", "sdk_gphone64_arm64", "Pixel_4_API_35", true))),
+        )
+        // A physical device: its model, and nothing that names it.
+        assertEquals("""{"model":"Google Pixel 8","simulator":false}""", Json.encode(DeviceInfo(model = "Google Pixel 8", simulator = false)))
+    }
+
+    @Test
+    fun `time answer`() {
+        assertEquals("""{"type":"time","scale":0.25}""", Json.encode(AppMessage.Time(0.25)))
+        assertEquals("""{"type":"time","scale":0}""", Json.encode(AppMessage.Time(0.0)))
+    }
+
+    @Test
+    fun `render hints`() {
+        assertEquals(
+            """{"type":"events","events":[{"kind":"renderHint","id":"dev/keyframer/example/DetailActivity.kt:31:0","hint":"layer-alpha","detail":"alpha animates on LinearLayout, which has overlapping rendering and no hardware layer"},{"kind":"renderHint","id":"x","hint":"elevation"}]}""",
+            Json.encode(
+                AppMessage.Events(
+                    listOf(
+                        Event.RenderHint("dev/keyframer/example/DetailActivity.kt:31:0", "layer-alpha", "alpha animates on LinearLayout, which has overlapping rendering and no hardware layer"),
+                        Event.RenderHint("x", "elevation"),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `accessibility, display, visibility and time markers`() {
+        val markers = listOf(
+            Marker.Accessibility(0, true),
+            Marker.Display(120, 60.0),
+            Marker.Visibility(300, "card", false, "offscreen"),
+            Marker.Visibility(420, "card", true),
+            Marker.Time(500, 0.25),
+            Marker.Time(900, 0.0),
+            Marker.Time(950, 0.0, step = 6),
+        )
+        assertEquals(
+            """{"type":"samples","samples":[],"markers":[{"kind":"accessibility","t":0,"reduceMotion":true},{"kind":"display","t":120,"hz":60},{"kind":"visibility","t":300,"id":"card","visible":false,"reason":"offscreen"},{"kind":"visibility","t":420,"id":"card","visible":true},{"kind":"time","t":500,"scale":0.25},{"kind":"time","t":900,"scale":0},{"kind":"time","t":950,"scale":0,"step":6}]}""",
+            Json.encode(AppMessage.Samples(emptyList(), markers = markers)),
+        )
+        // Moving them onto the recording's clock keeps everything else.
+        assertEquals(listOf(10L, 130L, 310L, 430L, 510L, 910L, 960L), markers.map { it.shifted(10).t })
+        assertEquals(Marker.Visibility(310, "card", false, "offscreen"), markers[2].shifted(10))
     }
 
     @Test

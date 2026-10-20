@@ -20,7 +20,20 @@ import type { InspectorRecording, InspectorRect, InspectorRedaction, InspectorSh
 import { Alert, Dimensions, NativeModules, PixelRatio, Platform, Share, TextInput } from 'react-native'
 import { autoCaptureScreen } from './capture'
 import { sendToEditors, type CaptureScreen } from './client'
-import { markersWhileRecording, measureUiFrames, sampleUiValues, snapshotScroll, uiThreadBridge, watchUiScroll, watchUiWork } from './native'
+import {
+  knownDisplay,
+  knownReduceMotion,
+  markersWhileRecording,
+  measureUiFrames,
+  readDevice,
+  reduceMotionNow,
+  sampleUiValues,
+  snapshotScroll,
+  uiThreadBridge,
+  watchUiScroll,
+  watchUiWork,
+} from './native'
+import { goBackTo, type NavContainer } from './navigation'
 import { startRecorder, type Recorder } from './recorder'
 import { redactRecording, type ProcessScreenshot } from './redact'
 import { createInspector, emitNavigation, emitTouch, registerNavigator, type TouchReport } from './runtime'
@@ -87,10 +100,9 @@ export type ShareLinksConfig = {
   onShared?: (shared: InspectorSharedRecording) => void
 }
 
-type NavRef = {
+type NavRef = NavContainer & {
   addListener(event: 'state', cb: () => void): () => void
   getCurrentRoute(): { name: string; params?: object } | undefined
-  navigate?: (name: string, params?: object) => void
 }
 
 /** Where a finished recording went. */
@@ -147,8 +159,28 @@ export function startRecording(config: RecorderConfig = {}): boolean {
   if (state.recorder) return false
   const c = { ...state.config, ...config }
   const { width, height } = Dimensions.get('window')
+  // The display and the motion settings at the start, as far as they are known: a refresh rate not
+  // measured yet arrives as a `display` marker once the frames say it, and Reduce Motion is read now.
+  const display = knownDisplay()
+  const reduceMotion = knownReduceMotion()
+  // Which device: a physical one says its model only (device.ts), since recordings get shared.
+  const device = readDevice()
+  const app: InspectorRecording['app'] = {
+    name: c.app ?? 'app',
+    platform: Platform.OS,
+    osVersion: String(Platform.Version),
+    framework: 'react-native',
+    ...(device ? { device } : {}),
+    ...(display ? { display } : {}),
+    ...(reduceMotion === null ? {} : { accessibility: { reduceMotion } }),
+  }
+  if (reduceMotion === null) {
+    void reduceMotionNow().then((rm) => {
+      if (rm !== null && !app.accessibility) app.accessibility = { reduceMotion: rm }
+    })
+  }
   state.recorder = startRecorder({
-    app: { name: c.app ?? 'app', platform: Platform.OS, osVersion: String(Platform.Version) },
+    app,
     screen: { width, height, scale: PixelRatio.get() },
     captureScreen: c.captureScreen === null ? undefined : (c.captureScreen ?? autoCaptureScreen()),
     screenshotEveryMs: c.screenshotEveryMs,
@@ -319,8 +351,8 @@ export function markNote(text: string): void {
 export function trackNavigation(ref: NavRef): () => void {
   state.navRefs.add(ref)
   const off = ref.addListener('state', () => markRoute(ref))
-  // Playback goes back to the screen a recording was on.
-  const offNavigator = registerNavigator((route, params) => ref.navigate?.(route, params))
+  // Playback goes back to the screen a recording was on: to its copy in the stack, not a new one.
+  const offNavigator = registerNavigator((route, params) => goBackTo(ref, route, params))
   // Where the app is now, for a recording that starts before the next screen change.
   markRoute(ref)
   return () => {

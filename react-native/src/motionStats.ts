@@ -77,6 +77,14 @@ export function estimateMs(ev: AnimEvent, byEid: (eid: number) => AnimEvent | un
     case 'exiting':
     case 'layout':
       return num(cfg(a0).delay, 0) + num(cfg(a0).duration, 300)
+    // SwiftUI (the iOS SDK sends durationMs when it can tell): `.default`, or one that repeats forever.
+    case 'withAnimation':
+    case 'Transaction': {
+      const c = cfg(a1)
+      const speed = num(c.speed, 1) > 0 ? num(c.speed, 1) : 1
+      const reps = c.repeatCount === 'infinite' ? 10 : Math.max(1, num(c.repeatCount, 1))
+      return (num(c.delay, 0) + num(c.duration, 300) * reps) / speed
+    }
     default: {
       // An API the inspector does not know (UIView.animate, ObjectAnimator, animateTo): a config with
       // duration and delay in ms, as the second argument or the only one.
@@ -183,13 +191,18 @@ export class MotionTracker {
  * The refresh interval a stream of frame times shows: the TYPICAL one (median), snapped to 60/90/120 Hz.
  * Not the shortest: a jittery loop (the iOS simulator's JS thread) sometimes delivers two callbacks a few
  * ms apart, and reading that as 120 Hz turned every ordinary 60 Hz frame into a "dropped" one.
+ * `displayHz`, when the app knows its display's rate: frames are never shorter than that display's,
+ * and it is the first rate tried (a 144 Hz screen, a 30 Hz one).
  */
-export function frameIntervalOf(recent: number[]): number {
+export function frameIntervalOf(recent: number[], displayHz?: number | null): number {
+  const top = typeof displayHz === 'number' && Number.isFinite(displayHz) && displayHz >= 1 ? displayHz : Infinity
+  const rates = top === Infinity ? [120, 90, 60] : [top, ...[120, 90, 60].filter((hz) => hz < top)]
+  const fallback = 1000 / Math.min(60, top)
   const xs = recent.filter((x) => x > 4).sort((a, b) => a - b)
-  if (!xs.length) return 1000 / 60
+  if (!xs.length) return fallback
   const median = xs[Math.floor(xs.length / 2)]!
-  for (const hz of [120, 90, 60]) if (median <= 1000 / hz + 1.5) return 1000 / hz
-  return 1000 / 60
+  for (const hz of rates) if (median <= 1000 / hz + 1.5) return 1000 / hz
+  return fallback
 }
 
 /** Frames a single frame of `dt` ms skipped at an `interval` ms refresh. */

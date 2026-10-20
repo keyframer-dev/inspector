@@ -1,32 +1,45 @@
 package dev.keyframer.inspector
 
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.hardware.display.DisplayManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
+import android.view.Display
 import android.view.MotionEvent
 import android.view.PixelCopy
 import android.view.Window
 import android.view.WindowManager
+import dev.keyframer.inspector.core.AccessibilityInfo
 import dev.keyframer.inspector.core.Cancellable
+import dev.keyframer.inspector.core.DeviceInfo
+import dev.keyframer.inspector.core.DisplayInfo
 import dev.keyframer.inspector.core.FrameLoop
 import dev.keyframer.inspector.core.Host
 import dev.keyframer.inspector.core.Marker
 import dev.keyframer.inspector.core.Screen
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
+import java.util.concurrent.Callable
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToInt
 
 /**
  * The platform side of the session: which activity is on top, touches on its window, screens as
- * navigation markers, the app going to the background, screenshots, and navigating back to a screen.
+ * navigation markers, the app going to the background, screenshots, and navigating back to a screen;
+ * the display's refresh rate and the motion settings (with their changes as markers), the visibility of
+ * tracked views while recording, and the animation speed (see [TimeControl]).
  */
 internal class AndroidHost(
     private val app: Application,
@@ -35,6 +48,8 @@ internal class AndroidHost(
     private val onActivityDestroyed: (Activity) -> Unit,
 ) : Host, Application.ActivityLifecycleCallbacks {
     override val platform = "android"
+    /** "compose" once keyframer-inspector-compose is installed: the problems engine words its fixes for it. */
+    override var framework: String = "android-views"
     override val osVersion: String = Build.VERSION.RELEASE
     override val build: String =
         if (app.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) "debug" else "release"
@@ -105,11 +120,26 @@ internal class AndroidHost(
     private var markerSink: ((Marker) -> Unit)? = null
     private val lastMove = HashMap<Int, Long>()
 
+    /** Tracked views to watch while recording (set by Keyframer: animator targets and signal views). */
+    var visibilityTargets: () -> List<ViewTarget> = { emptyList() }
+    private var visibility: VisibilityWatcher? = null
+
+    /** Whether any activity is started: in the background, views are not checked (that is an appState marker). */
+    val inForeground: Boolean get() = started > 0
+
     override fun watchMarkers(onMarker: (Marker) -> Unit): Cancellable {
         markerSink = onMarker
         lastMove.clear()
         route?.let { onMarker(Marker.Navigation(AndroidClock.nowMs().toLong(), it, routeParams)) }
-        return Cancellable { if (markerSink === onMarker) markerSink = null }
+        visibility?.stop()
+        val watcher = VisibilityWatcher({ visibilityTargets() }, { inForeground }) { m -> markerSink?.invoke(m) }
+        visibility = watcher
+        watcher.start()
+        return Cancellable {
+            if (markerSink === onMarker) markerSink = null
+            watcher.stop()
+            if (visibility === watcher) visibility = null
+        }
     }
 
     private fun wrapWindow(activity: Activity) {
@@ -236,12 +266,106 @@ internal class AndroidHost(
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
+    // ── device ───────────────────────────────────────────────────────────────────────────────────
+
+    /** Probed once at start, off the main thread (it runs getprop); the hello waits briefly for it. */
+    private val probedDevice = encoder.submit(Callable { DeviceProbe.read(app) })
+
+    override val device: DeviceInfo?
+        get() = runCatching { probedDevice.get(300, TimeUnit.MILLISECONDS) }.getOrNull()
+
     // ── display ──────────────────────────────────────────────────────────────────────────────────
 
-    override fun refreshRate(): Float {
-        val wm = app.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-        @Suppress("DEPRECATION")
-        return wm.defaultDisplay?.refreshRate ?: 60f
+    private val displays = app.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+
+    private fun defaultDisplay(): Display? = runCatching { displays.getDisplay(Display.DEFAULT_DISPLAY) }.getOrNull()
+
+    override fun refreshRate(): Float = defaultDisplay()?.refreshRate?.takeIf { it > 0 } ?: 60f
+
+    /** Whole hertz: displays report 59.94 or 60.000004 for 60. */
+    private fun currentHz(): Double = Math.round(refreshRate()).toDouble()
+
+    /**
+     * The highest rate among the display's modes at its current resolution, and adaptive when it has
+     * several (variable refresh switches between them by content, touch and power).
+     */
+    override val display: DisplayInfo
+        get() {
+            val d = defaultDisplay() ?: return DisplayInfo(60.0)
+            val rates = runCatching {
+                val mode = d.mode
+                d.supportedModes.filter { it.physicalWidth == mode.physicalWidth && it.physicalHeight == mode.physicalHeight }
+                    .map { Math.round(it.refreshRate) }
+                    .distinct()
+            }.getOrDefault(emptyList())
+            val hz = maxOf(rates.maxOrNull() ?: 0, Math.round(d.refreshRate))
+            return DisplayInfo(hz.toDouble(), adaptive = rates.size > 1)
+        }
+
+    private var lastHz = 0.0
+
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(displayId: Int) = Unit
+        override fun onDisplayRemoved(displayId: Int) = Unit
+        override fun onDisplayChanged(displayId: Int) {
+            if (displayId != Display.DEFAULT_DISPLAY) return
+            val hz = currentHz()
+            if (hz == lastHz) return
+            lastHz = hz
+            markerSink?.invoke(Marker.Display(AndroidClock.nowMs().toLong(), hz))
+        }
+    }
+
+    // ── motion settings ──────────────────────────────────────────────────────────────────────────
+
+    /** The animator duration scale the person chose: 0 is "Remove animations" (Reduce Motion). */
+    fun animatorScaleSetting(): Float = runCatching {
+        Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    }.getOrElse {
+        if (Build.VERSION.SDK_INT >= 26 && !ValueAnimator.areAnimatorsEnabled()) 0f else 1f
+    }
+
+    override val accessibility: AccessibilityInfo get() = AccessibilityInfo(reduceMotion = animatorScaleSetting() == 0f)
+
+    private var lastReduceMotion = false
+
+    private val settingsObserver = object : ContentObserver(mainHandler) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            val reduce = animatorScaleSetting() == 0f
+            time?.systemScaleChanged()
+            if (reduce == lastReduceMotion) return
+            lastReduceMotion = reduce
+            markerSink?.invoke(Marker.Accessibility(AndroidClock.nowMs().toLong(), reduce))
+        }
+    }
+
+    // ── time ─────────────────────────────────────────────────────────────────────────────────────
+
+    /** Slow motion, pause and step (set by Keyframer once the animator tracker exists). */
+    var time: TimeControl? = null
+
+    override val canControlTime: Boolean get() = time != null
+
+    override fun setTime(scale: Double, step: Int?): Double? = time?.set(scale, step)
+
+    // ── lifetime ─────────────────────────────────────────────────────────────────────────────────
+
+    /** Starts listening for display and settings changes. */
+    fun startWatching() {
+        lastHz = currentHz()
+        lastReduceMotion = accessibility.reduceMotion
+        runCatching { displays.registerDisplayListener(displayListener, mainHandler) }
+        runCatching {
+            app.contentResolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, settingsObserver)
+        }
+    }
+
+    fun dispose() {
+        runCatching { displays.unregisterDisplayListener(displayListener) }
+        runCatching { app.contentResolver.unregisterContentObserver(settingsObserver) }
+        visibility?.stop()
+        visibility = null
+        markerSink = null
     }
 
     private fun realSize(): Pair<Int, Int> {

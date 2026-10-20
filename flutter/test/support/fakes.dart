@@ -121,3 +121,64 @@ class TestValue {
   int ended = 0;
   late final KfSignal signal;
 }
+
+/// A host with what newer SDK versions ask of it: the display and motion settings, the animation clock
+/// and the widget tree. [FakeHost] alone stands for a host written before them.
+class FakeFullHost extends FakeHost implements KfDeviceHost, KfTimeHost, KfSceneHost {
+  KfDisplay? displayNow = const KfDisplay(120, adaptive: true);
+  KfAccessibility? accessibilityNow = const KfAccessibility(reduceMotion: false);
+  String? appStateNow = 'active';
+  void Function()? onDeviceChange;
+
+  double scale = 1;
+  final List<double> scales = [];
+  final List<int> steps = [];
+
+  void Function(String id, bool visible, String? reason)? onVisibility;
+  void Function(KfRenderHint hint)? onHint;
+  int scenes = 0;
+  bool sites = true;
+
+  @override
+  bool get widgetSites => sites;
+
+  @override
+  KfDisplay? get display => displayNow;
+
+  @override
+  KfAccessibility? get accessibility => accessibilityNow;
+
+  @override
+  String? get appState => appStateNow;
+
+  @override
+  void Function() watchDevice(void Function() onChange) {
+    onDeviceChange = onChange;
+    return () => onDeviceChange = null;
+  }
+
+  @override
+  double setTimeScale(double s) {
+    scale = s < 0 ? 1 : s;
+    scales.add(scale);
+    return scale;
+  }
+
+  @override
+  void stepFrames(int frames) => steps.add(frames);
+
+  @override
+  void Function() watchScene(
+    KfRuntime runtime, {
+    required void Function(String id, bool visible, String? reason) onVisibility,
+    required void Function(KfRenderHint hint) onHint,
+  }) {
+    this.onVisibility = onVisibility;
+    this.onHint = onHint;
+    scenes++;
+    return () {
+      this.onVisibility = null;
+      this.onHint = null;
+    };
+  }
+}

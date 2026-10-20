@@ -1,0 +1,13 @@
+# QA Compose check (passes today): kfAnimateDpAsState spring(dampingRatio 0.6, stiffness 300),
+# 110 -> 200 dp: theory 9.5%, measured 9.3%; kfAnimateFloatAsState tween(400): measured 383 ms.
+# Needs the Compose screen on top (run qa-compose-open first, or "open compose").
+name: qa compose toggle 1x
+flow: { scenario: toggle compose card }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: height
+    overshoot: 8%..11%
+  - value: corner
+    duration: 350ms..450ms
+    overshoot: < 1%
+  - none: [two-writers, jump]

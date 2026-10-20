@@ -5,6 +5,8 @@ import XCTest
 final class TouchFlowUITests: XCTestCase {
     func testTouchesDragAndNavigation() throws {
         let app = XCUIApplication()
+        // A relay on another port: `TEST_RUNNER_KEYFRAMER_INSPECTOR_PORT=<port> xcodebuild test ...`.
+        if let port = ProcessInfo.processInfo.environment["KEYFRAMER_INSPECTOR_PORT"] { app.launchEnvironment["KEYFRAMER_INSPECTOR_PORT"] = port }
         app.launch()
         // Time for the app to connect and the editor to start recording.
         sleep(3)

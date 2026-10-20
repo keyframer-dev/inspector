@@ -53,6 +53,19 @@ class RelayEndToEndTest {
         main.shutdownNow()
     }
 
+    /** The same port again, retrying briefly while the old relay's connections close. */
+    private fun restartOn(port: Int): FakeRelay {
+        val until = System.currentTimeMillis() + 5000
+        while (true) {
+            try {
+                return FakeRelay().start(port)
+            } catch (e: java.net.BindException) {
+                if (System.currentTimeMillis() > until) throw e
+                Thread.sleep(100)
+            }
+        }
+    }
+
     private fun editor() = EditorClient("ws://127.0.0.1:${relay.port}/editor").also {
         editors.add(it)
         it.awaitOpen()
@@ -139,7 +152,11 @@ class RelayEndToEndTest {
 
     @Test
     fun `reconnects when the relay comes back`() {
-        val port = relay.port
+        // A port of our own, not 0: MockWebServer only sets SO_REUSEADDR for an explicit port, and
+        // without it Linux keeps the port from the restart below while the old connections wind down.
+        relay.stop()
+        val port = java.net.ServerSocket(0).use { it.localPort }
+        relay = FakeRelay().start(port)
         val host = object : Host {
             override val appName = "R"
             override val platform = "android"
@@ -148,15 +165,18 @@ class RelayEndToEndTest {
             override val frames = this@RelayEndToEndTest.frames
             override fun watchMarkers(onMarker: (Marker) -> Unit) = Cancellable {}
         }
+        // The editor first: this fake relay does not keep the app's hello for editors that join later
+        // (the desktop app's does), so an app that connects first would leave it nothing to wait for.
+        val first = editor()
         lateinit var session: InspectorSession
         onMain {
             session = InspectorSession(InspectorSession.relayUrl("127.0.0.1", port, "R"), OkHttpSockets(), scheduler, clock, host)
             session.start()
         }
-        editor().await(5000, "first hello") { it["type"] == "hello" }
+        first.await(5000, "first hello") { it["type"] == "hello" }
         relay.stop()
         Thread.sleep(300)
-        relay = FakeRelay().start(port)
+        relay = restartOn(port)
         val again = editor()
         // Backoff is 500 ms, then 1 s: well inside the wait.
         again.await(8000, "hello after the relay restarted") { it["type"] == "hello" && it["app"] == "R" }

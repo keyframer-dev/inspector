@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (glitch lab): console.error(new Error(...)) at app/glitches.tsx:122. The error problem is
+# expected (read from the report, with its call site); nothing else may appear.
+name: qa glitch log error
+flow:
+  scenario: "glitch lab: log an error"
+expect:
+  - none: [reduce-motion, two-writers, jump]

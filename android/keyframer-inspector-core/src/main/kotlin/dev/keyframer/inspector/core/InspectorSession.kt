@@ -11,12 +11,19 @@ import kotlin.math.roundToLong
  *   - on open: `hello`, then everything queued (the catalog of signals first);
  *   - events (animations, signals) batched every [batchMs];
  *   - `record` samples the listed signals every frame, with the frame meter and markers riding along
- *     in `samples` batches; `['*']` includes signals that register while recording;
+ *     in `samples` batches; `['*']` includes signals that register while recording. Each `recorder`
+ *     (an editor's own id; none is the anonymous one) keeps its ids: recording runs while any recorder
+ *     is on, over the union, so two editors recording at once do not stop each other;
  *   - `playback` writes recorded samples back in time order, navigating along the recorded routes;
  *   - `capture` shows one set of samples, waits for the screen, snapshots it and answers with `frame`;
  *   - `scenario`, `replay` and `overrides` as on React Native;
- *   - a new editor (a `presence` with more editors, or an editor `hello` the relay forwards) gets the
- *     app's hello and the catalog again;
+ *   - `time` changes the animation speed through the host and is answered with the speed in effect;
+ *     while recording, each change is a `time` marker. When the last editor leaves (or the connection
+ *     drops) the speed goes back to 1: nobody is left to un-pause the app;
+ *   - render hints are reported once and kept with the catalog;
+ *   - a new editor gets the catalog again (on a `presence` with more editors; the relay itself hands
+ *     it the app's hello), or the hello and the catalog (on an editor `hello` the relay forwards), and
+ *     the speed when it is not 1;
  *   - reconnects with a backoff from 500 ms to 10 s.
  *
  * Single threaded: construct it and call it on the Scheduler's thread.
@@ -117,11 +124,32 @@ class InspectorSession(
     fun removeSignal(id: String) {
         if (signals.remove(id) == null) return
         catalog.remove("signal:$id")
+        catalog.keys.removeAll { it.startsWith("renderHint:$id:") }
         recording.remove(id)
-        enqueue(Event.Unsignal(id))
+        for (r in recorders.values) r.ids.remove(id)
+        // While recording, when: the value's history ends here.
+        enqueue(Event.Unsignal(id, if (isRecording) elapsed() else null))
     }
 
     fun signal(id: String): Signal? = signals[id]
+
+    /** The ids of the signals registered now. */
+    val signalIds: Set<String> get() = signals.keys.toSet()
+
+    /**
+     * Something about how the view behind signal `id` is drawn that costs more than it needs to (see
+     * Event.RenderHint). Kept with the catalog, so an editor that joins later hears about it too.
+     */
+    fun reportRenderHint(id: String, hint: String, detail: String? = null) {
+        val e = Event.RenderHint(id, hint, detail)
+        // Once per signal and hint: an animator made again for the same view (one per tap) says nothing new.
+        if (catalog["renderHint:$id:$hint"] == e) return
+        enqueue(e)
+    }
+
+    /** The animation speed in effect: 1 normal, 0 paused (see [Host.setTime]). */
+    var timeScale = 1.0
+        private set
 
     /**
      * An animation started. `stack` is the stack of the call that started it: while recording it rides
@@ -160,9 +188,10 @@ class InspectorSession(
         disposed = true
         flushTimer?.cancel()
         reconnect?.cancel()
+        restoreTime()
         stopPlayback()
         releaseCapture()
-        if (isRecording) setRecording(listOf("*"), false)
+        if (isRecording) stopRecording()
         frameLoop?.cancel()
         frameLoop = null
         frameConsumers.clear()
@@ -173,11 +202,17 @@ class InspectorSession(
 
     // ── queue and flush ──────────────────────────────────────────────────────────────────────────
 
-    private fun enqueue(e: Event) {
+    private fun enqueue(event: Event) {
+        var e = event
         if (e is Event.Signal) {
+            // As registered: an editor that connects later gets no recording time with it.
             catalog["signal:${e.site.id}"] = e
-            // A signal registered while recording is new or replaces one; recording everything, it joins.
+            // A signal registered while recording is new or replaces one (a screen made again: same
+            // ids, a new instance from `t` on); recording everything, it joins.
+            if (isRecording) e = e.copy(t = elapsed())
             if (recordAll) recording.add(e.site.id)
+        } else if (e is Event.RenderHint) {
+            catalog["renderHint:${e.id}:${e.hint}"] = e
         }
         queue.add(e)
         if (queue.size > MAX_QUEUED_EVENTS) queue = ArrayList(queue.subList(queue.size - MAX_QUEUED_EVENTS, queue.size))
@@ -204,19 +239,38 @@ class InspectorSession(
         }
     }
 
-    private fun hello() = AppMessage.Hello(
-        app = host.appName,
-        platform = host.platform,
-        capture = host.canCapture,
-        screen = host.screen,
-        scenarios = scenarios.keys.toList(),
-        framework = host.framework,
-        osVersion = host.osVersion,
-        build = host.build,
-        threads = host.threads,
-        capabilities = host.capabilities,
-        root = host.root,
-    )
+    /** What the last hello said about the display and the motion settings, to tell recordings what changed since. */
+    private var saidDisplay: DisplayInfo? = null
+    private var saidAccessibility: AccessibilityInfo? = null
+
+    private fun hello(): AppMessage.Hello {
+        val display = host.display
+        val accessibility = host.accessibility
+        saidDisplay = display
+        saidAccessibility = accessibility
+        return AppMessage.Hello(
+            app = host.appName,
+            platform = host.platform,
+            capture = host.canCapture,
+            screen = host.screen,
+            scenarios = scenarios.keys.toList(),
+            framework = host.framework,
+            osVersion = host.osVersion,
+            build = host.build,
+            threads = host.threads,
+            capabilities = host.capabilities,
+            root = host.root,
+            display = display,
+            accessibility = accessibility,
+            device = host.device,
+        )
+    }
+
+    /** The hello, then the speed when it is not 1, so a panel that just connected shows the same state. */
+    private fun sendHello() {
+        sendRaw(hello())
+        if (timeScale != 1.0) sendRaw(AppMessage.Time(timeScale))
+    }
 
     // ── connection ───────────────────────────────────────────────────────────────────────────────
 
@@ -239,7 +293,7 @@ class InspectorSession(
     private fun opened() {
         open = true
         backoff = 500
-        sendRaw(hello())
+        sendHello()
         flush()
     }
 
@@ -247,6 +301,9 @@ class InspectorSession(
         open = false
         socket = null
         editors = 0
+        restoreTime()
+        // Nobody is left to stop them: the editors that come back say again what they record.
+        if (isRecording) stopRecording()
         if (disposed) return
         reconnect = scheduler.post(backoff) { connect() }
         backoff = minOf(backoff * 2, MAX_BACKOFF_MS)
@@ -259,26 +316,78 @@ class InspectorSession(
                 onOverrides?.invoke(overrides)
             }
             EditorMessage.Replay -> host.replay()
-            is EditorMessage.Record -> setRecording(msg.signalIds, msg.on)
+            is EditorMessage.Record -> setRecording(msg.signalIds, msg.on, msg.recorder)
             is EditorMessage.Playback -> playback(msg.samples, msg.routes)
             is EditorMessage.Capture -> capture(msg)
             is EditorMessage.Scenario -> runScenario(msg.name)
             is EditorMessage.Presence -> {
                 // A new editor missed the one-off signal reports: send it the catalog.
-                if (msg.editors > editors && catalog.isNotEmpty()) sendRaw(AppMessage.Events(catalog.values.toList()))
+                if (msg.editors > editors) {
+                    if (catalog.isNotEmpty()) sendRaw(AppMessage.Events(catalog.values.toList()))
+                    if (timeScale != 1.0) sendRaw(AppMessage.Time(timeScale))
+                }
+                // The last editor left: nobody can un-pause the app any more, or stop its recorders.
+                if (msg.editors == 0 && editors > 0) {
+                    restoreTime()
+                    if (isRecording) stopRecording()
+                }
                 editors = msg.editors
             }
             is EditorMessage.Hello -> if (msg.role == "editor") {
                 // A relay that forwards an editor's hello instead of sending presence: same answer.
-                sendRaw(hello())
+                sendHello()
                 if (catalog.isNotEmpty()) sendRaw(AppMessage.Events(catalog.values.toList()))
             }
+            is EditorMessage.Time -> setTime(msg.scale, msg.step)
             is EditorMessage.Ignored -> Unit
         }
     }
 
+    // ── time ─────────────────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Applies an editor's `time` and answers with the speed in effect, every time: 1 when the host cannot
+     * change it, unchanged when the message asked for nothing usable (see TimeRules).
+     */
+    private fun setTime(scale: Double?, step: Int?) {
+        if (scale != null) {
+            val applied = (if (host.canControlTime) runCatching { host.setTime(scale, step) }.getOrNull() else null) ?: 1.0
+            timeChanged(applied)
+            // Each step while paused is a marker of its own: the frames the app's clock moved on.
+            if (applied == 0.0 && step != null && isRecording) addMarker(Marker.Time(elapsed(), 0.0, step))
+        }
+        sendRaw(AppMessage.Time(timeScale))
+    }
+
+    /**
+     * Back to normal speed when nobody is left to control it, said to the relay (which remembers the
+     * speed for editors that join later). After the connection dropped there is nobody to tell: the
+     * hello on reconnecting implies 1.
+     */
+    private fun restoreTime() {
+        if (timeScale == 1.0) return
+        runCatching { host.setTime(1.0, null) }
+        timeChanged(1.0)
+        sendRaw(AppMessage.Time(1.0))
+    }
+
+    private fun timeChanged(scale: Double) {
+        if (scale == timeScale) return
+        timeScale = scale
+        if (isRecording) addMarker(Marker.Time(elapsed(), scale))
+    }
+
     // ── record ───────────────────────────────────────────────────────────────────────────────────
 
+    /** What one recorder records: its ids, or every value (`*`). */
+    private class Recorder {
+        val ids = LinkedHashSet<String>()
+        var all = false
+    }
+
+    /** By recorder id ("": requests without one). Recording runs while there is any. */
+    private val recorders = LinkedHashMap<String, Recorder>()
+    /** The union of what the recorders record, sampled every frame. */
     private val recording = LinkedHashSet<String>()
     private var recordAll = false
     private var recordStart = 0.0
@@ -289,7 +398,7 @@ class InspectorSession(
     private fun elapsed(): Long = max(0L, (clock.nowMs() - recordStart).roundToLong())
 
     /** Recording `['*']` counts with no signal yet: frames, markers and animations are recorded all the same. */
-    val isRecording: Boolean get() = recording.isNotEmpty() || recordAll
+    val isRecording: Boolean get() = recorders.isNotEmpty()
 
     private val recorder = object : FrameConsumer {
         override fun onFrame(vsync: Double) {
@@ -309,27 +418,60 @@ class InspectorSession(
         }
     }
 
-    fun setRecording(ids: List<String>, on: Boolean) {
+    /**
+     * `recorder`'s ids on or off (null: the anonymous recorder). Off with `*` stops that recorder; one
+     * left with nothing goes away. The recording starts over only when the first recorder starts, and
+     * stops when the last one does.
+     */
+    @JvmOverloads
+    fun setRecording(ids: List<String>, on: Boolean, recorder: String? = null) {
         val was = isRecording
+        val key = recorder ?: ""
         val all = "*" in ids
         if (on) {
             if (!was) recordStart = clock.nowMs()
-            if (all) recordAll = true
-            recording.addAll(if (all) signals.keys else ids)
-        } else if (all) {
-            recordAll = false
-            recording.clear()
+            val r = recorders.getOrPut(key) { Recorder() }
+            if (all) r.all = true
+            r.ids.addAll(ids.filter { it != "*" })
         } else {
-            recording.removeAll(ids.toSet())
+            val r = recorders[key]
+            if (r != null) {
+                if (all) r.all = false
+                r.ids.removeAll(ids.toSet())
+                if (all || (!r.all && r.ids.isEmpty())) recorders.remove(key)
+            }
         }
+        recordAll = recorders.values.any { it.all }
+        recording.clear()
+        if (recordAll) recording.addAll(signals.keys)
+        for (r in recorders.values) recording.addAll(r.ids)
+        recordingChanged(was)
+    }
+
+    /** Every recorder off at once (the last editor left, or the session is disposed). */
+    private fun stopRecording() {
+        val was = isRecording
+        recorders.clear()
+        recordAll = false
+        recording.clear()
+        recordingChanged(was)
+    }
+
+    private fun recordingChanged(was: Boolean) {
         val now = isRecording
         if (was == now) return
         if (now) {
-            meter = FrameMeter("js").also { it.hintRefreshRate(host.refreshRate()) }
+            val m = FrameMeter("js")
+            val rate = host.refreshRate()
+            // A display that says its rate: frames are counted against it (and its changes, below).
+            if (host.display != null) m.setRefreshRate(rate.toDouble()) else m.hintRefreshRate(rate)
+            meter = m
             addFrames(recorder)
+            startMarkers(rate)
             val shift = -recordStart.roundToLong()
-            unwatchMarkers = host.watchMarkers { m ->
-                if (markers.size < MAX_QUEUED_EVENTS) markers.add(m.shifted(shift).let { if (it.t < 0) it.shifted(-it.t) else it })
+            unwatchMarkers = host.watchMarkers { marker ->
+                if (marker is Marker.Display) meter?.setRefreshRate(marker.hz)
+                addMarker(marker.shifted(shift).let { if (it.t < 0) it.shifted(-it.t) else it })
             }
         } else {
             meter = null
@@ -337,6 +479,26 @@ class InspectorSession(
             unwatchMarkers?.cancel()
             unwatchMarkers = null
         }
+    }
+
+    private fun addMarker(m: Marker) {
+        if (markers.size < MAX_QUEUED_EVENTS) markers.add(m)
+    }
+
+    /**
+     * What a reader of the recording would get wrong from the hello alone, as markers at its start: a
+     * display running below the rate the hello gave (an adaptive one idling at 60 Hz), motion settings
+     * changed since the hello, an animation speed other than 1.
+     */
+    private fun startMarkers(rate: Float) {
+        val display = saidDisplay ?: host.display
+        val hz = Math.round(rate).toDouble()
+        if (display != null && hz > 0 && hz != display.hz) addMarker(Marker.Display(0, hz))
+        val accessibility = host.accessibility
+        if (accessibility != null && accessibility != (saidAccessibility ?: AccessibilityInfo(false))) {
+            addMarker(Marker.Accessibility(0, accessibility.reduceMotion))
+        }
+        if (timeScale != 1.0) addMarker(Marker.Time(0, timeScale))
     }
 
     // ── playback ─────────────────────────────────────────────────────────────────────────────────

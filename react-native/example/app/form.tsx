@@ -30,11 +30,11 @@ export default function Form() {
     <KeyboardAvoidingView key={run} style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <Note>Type a bad email and submit: the field shakes and a warning goes to the log. The keyboard showing and hiding is recorded too.</Note>
-        <TextInput style={styles.input} placeholder="Name" value={name} onChangeText={setName} />
+        <TextInput testID="form-name" style={styles.input} placeholder="Name" value={name} onChangeText={setName} />
         <Animated.View style={fieldStyle}>
-          <TextInput style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
+          <TextInput testID="form-email" style={styles.input} placeholder="Email" value={email} onChangeText={setEmail} autoCapitalize="none" keyboardType="email-address" />
         </Animated.View>
-        <Button title="Create account" tone="primary" onPress={submit} />
+        <Button testID="form-submit" title="Create account" tone="primary" onPress={submit} />
         {done && (
           <Animated.View style={[styles.done, checkStyle]}>
             <Text style={styles.doneMark}>✓</Text>

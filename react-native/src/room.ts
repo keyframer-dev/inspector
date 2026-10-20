@@ -3,8 +3,8 @@
  * rules the API's InspectorRoom Durable Object applies. Kept free of Workers and React Native APIs
  * so the editor, the app, the cli and the API share one implementation and it can be unit tested.
  *
- *   app    → editors          (hello, events, samples)
- *   editor → app              (overrides, replay, record, playback)
+ *   app    → editors          (hello, events, samples, time)
+ *   editor → app              (overrides, replay, record, playback, time)
  *   editor → cli              (apply)
  *   cli    → editors          (hello, applied)
  *   room   → everyone         (presence, on every join and leave)
@@ -43,7 +43,8 @@ export function inspectorRoomUrl(apiUrl: string, code: string, role: InspectorRo
 
 /** Which message types each role may send, and to whom they go. */
 const ROUTES: Record<InspectorRole, Record<string, InspectorRole[]>> = {
-  app: { hello: ['editor'], events: ['editor'], samples: ['editor'], scenarios: ['editor'], scenarioDone: ['editor'], frame: ['editor'], recording: ['editor'] },
+  // `time` both ways: an editor sets the app's animation speed, and the app answers with the speed it runs at.
+  app: { hello: ['editor'], events: ['editor'], samples: ['editor'], scenarios: ['editor'], scenarioDone: ['editor'], frame: ['editor'], recording: ['editor'], time: ['editor'] },
   editor: {
     overrides: ['app'],
     replay: ['app'],
@@ -52,6 +53,7 @@ const ROUTES: Record<InspectorRole, Record<string, InspectorRole[]>> = {
     capture: ['app'],
     scenario: ['app'],
     scrub: ['app'],
+    time: ['app'],
     apply: ['cli'],
     source: ['cli'],
     hello: [],
@@ -111,6 +113,34 @@ export function claimRoom(
 /** Roles that keep a single connection: a new app or cli replaces the one already in the room. */
 export function replacesExisting(role: InspectorRole): boolean {
   return role === 'app' || role === 'cli'
+}
+
+/**
+ * What the room keeps for an editor that joins after the app said hello (an agent's MCP server, a
+ * second tab): the app's last hello, and its last `time` answer, which goes right after it. A new
+ * hello clears the `time` answer (a reloaded app is back at 1x); the app leaving clears both. The
+ * desktop relay and the Metro channel keep the same two.
+ */
+export type LateEditorCache = { hello?: string; time?: string }
+
+/** The cache after a message from `from`, or null when the message does not change it (most do not). */
+export function cacheForLateEditors(cache: LateEditorCache, from: InspectorRole, raw: string): LateEditorCache | null {
+  // Samples and events are most of the traffic: only a message that can be a hello or a time is parsed.
+  if (from !== 'app' || !/"type"\s*:\s*"(?:hello|time)"/.test(raw)) return null
+  let msg: { type?: unknown; role?: unknown }
+  try {
+    msg = JSON.parse(raw) as { type?: unknown; role?: unknown }
+  } catch {
+    return null
+  }
+  if (msg.type === 'hello' && msg.role === 'app') return { hello: raw }
+  if (msg.type === 'time' && cache.hello) return { ...cache, time: raw }
+  return null
+}
+
+/** What a joining editor is sent, in order. */
+export function lateEditorMessages(cache: LateEditorCache): string[] {
+  return cache.hello ? [cache.hello, ...(cache.time ? [cache.time] : [])] : []
 }
 
 function byteLength(s: string): number {

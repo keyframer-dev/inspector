@@ -60,7 +60,7 @@ const anim: InspectorEvent = {
 const stackless: InspectorEvent = {
   kind: 'anim',
   eid: 8,
-  site: { id: 'ViewController.spin()+212/transform.rotation.z', file: 'ViewController.spin()', line: 0, column: 0, fn: 'CABasicAnimation', component: null, target: null, prop: null, params: [] },
+  site: { id: 'ViewController.spin()/transform.rotation.z', file: 'ViewController.spin()', line: 0, column: 0, fn: 'CABasicAnimation', component: null, target: null, prop: null, params: [] },
   at: 1760000000200,
   args: [6.283, { animation: 'CABasicAnimation', duration: 1000, easing: 'linear', bezier: [0, 0, 1, 1], repeatCount: 'infinite' }],
 }
@@ -77,6 +77,40 @@ const scrollSignal: InspectorEvent = {
 const readOnlySignal: InspectorEvent = { kind: 'signal', site: { id: 'Sensor/pitch', file: 'Sensor.swift', line: 12, component: null, name: 'pitch', kind: 'value', writable: false } }
 const unsignal: InspectorEvent = { kind: 'unsignal', id: 'DetailViewController.header/opacity' }
 const style: InspectorEvent = { kind: 'style', site: { id: 'App.tsx:10:2', file: 'App.tsx', line: 10, component: 'App', name: 'cardStyle', links: [{ signal: 'App.tsx:4:2', prop: 'transform.scale' }] } }
+const shadowHint: InspectorEvent = {
+  kind: 'renderHint',
+  id: 'CardsViewController.card/shadowPath',
+  hint: 'shadow-path',
+  detail: 'shadowOpacity 0.25, shadowRadius 12 and no shadowPath on CardsViewController.card',
+}
+const blurHint: InspectorEvent = { kind: 'renderHint', id: 'CardsViewController.pill/blur', hint: 'blur' }
+// A SwiftUI trace (KeyframerInspectorSwiftUI): a withKeyframerAnimation call site, a value signal.
+const swiftUIAnim: InspectorEvent = {
+  kind: 'anim',
+  eid: 9,
+  site: {
+    id: 'KeyframerExample/SwiftUICardsView.swift:41:13/card',
+    file: 'KeyframerExample/SwiftUICardsView.swift',
+    line: 41,
+    column: 13,
+    fn: 'withAnimation',
+    component: 'SwiftUICardsView',
+    target: 'card',
+    prop: null,
+    params: [
+      { path: '1.response', value: 500 },
+      { path: '1.dampingFraction', value: 0.55 },
+    ],
+  },
+  at: 1760000000300,
+  args: [-120, { animation: 'spring', response: 500, dampingFraction: 0.55, settlingDuration: 1393.2, from: 0 }],
+  thread: 'js',
+  durationMs: 1393.2,
+}
+const swiftUISignal: InspectorEvent = {
+  kind: 'signal',
+  site: { id: 'SwiftUICardsView.dot/x', file: 'KeyframerExample/SwiftUICardsView.swift', line: 52, column: 18, component: 'SwiftUICardsView', name: 'dot.x', kind: 'value', writable: false },
+}
 
 const markers: InspectorMarker[] = [
   { kind: 'touch', t: 10, phase: 'start', id: 1, x: 120.5, y: 300 },
@@ -88,6 +122,14 @@ const markers: InspectorMarker[] = [
   { kind: 'log', t: 1200, level: 'warn', message: 'slow' },
   { kind: 'note', t: 1300, text: 'tapped twice' },
   { kind: 'gesture', t: 1400, gesture: 'Pan', on: 'onUpdate', handler: 3, x: null, y: 20, site: 'App.tsx:20', component: null },
+  { kind: 'accessibility', t: 1500, reduceMotion: true },
+  { kind: 'display', t: 1600, hz: 60 },
+  { kind: 'visibility', t: 1700, id: 'CardsViewController.pill/position.x', visible: false, reason: 'offscreen' },
+  { kind: 'visibility', t: 2300, id: 'CardsViewController.pill/position.x', visible: true },
+  { kind: 'visibility', t: 2400, id: 'DetailViewController.header/opacity', visible: false, reason: 'detached' },
+  { kind: 'time', t: 1800, scale: 0.25 },
+  { kind: 'time', t: 2000, scale: 0 },
+  { kind: 'time', t: 2100, scale: 0, step: 6 },
 ]
 
 const app: InspectorAppMessage[] = [
@@ -104,13 +146,18 @@ const app: InspectorAppMessage[] = [
     framework: 'uikit',
     osVersion: '26.5',
     threads: { js: { label: 'Main', animates: true } },
-    capabilities: ['capture', 'playback', 'scrub', 'overrides', 'replay', 'scenarios'],
+    capabilities: ['capture', 'playback', 'scrub', 'overrides', 'replay', 'scenarios', 'time'],
+    display: { hz: 120, adaptive: true },
+    accessibility: { reduceMotion: false },
+    device: { name: 'iPhone 17 Pro', model: 'iPhone18,1', id: 'D95F3325-AE85-4445-9CB9-2D3C90388D88', simulator: true },
   },
   { type: 'hello', role: 'app', app: 'Bare', platform: 'ios' },
+  // A physical device: its model, never its name.
+  { type: 'hello', role: 'app', app: 'SwiftUI', platform: 'ios', framework: 'swiftui', display: { hz: 60 }, accessibility: { reduceMotion: true }, device: { model: 'iPhone17,1', simulator: false } },
   { type: 'scenarios', names: ['bounce'] },
   { type: 'scenarioDone', name: 'bounce', ms: 612 },
   { type: 'scenarioDone', name: 'nope', ms: 0, error: 'No scenario named "nope". Registered: bounce.' },
-  { type: 'events', events: [anim, stackless, signal, unnamedSignal, scrollSignal, readOnlySignal, unsignal, style] },
+  { type: 'events', events: [anim, stackless, signal, unnamedSignal, scrollSignal, readOnlySignal, unsignal, style, shadowHint, blurHint, swiftUIAnim, swiftUISignal] },
   {
     type: 'samples',
     samples: [
@@ -124,6 +171,8 @@ const app: InspectorAppMessage[] = [
   { type: 'samples', samples: [] },
   { type: 'frame', id: 'f1', data: 'AAAA', format: 'jpg' },
   { type: 'frame', id: 'f2', error: 'No window to capture.' },
+  { type: 'time', scale: 0.25 },
+  { type: 'time', scale: 1 },
 ]
 
 const editor: InspectorEditorMessage[] = [
@@ -132,6 +181,8 @@ const editor: InspectorEditorMessage[] = [
   { type: 'replay' },
   { type: 'record', signalIds: ['*'], on: true },
   { type: 'record', signalIds: ['ViewController.card/position.y'], on: false },
+  { type: 'record', signalIds: ['*'], on: true, recorder: 'ci-7f3a' },
+  { type: 'record', signalIds: ['*'], on: false, recorder: 'ci-7f3a' },
   { type: 'scenario', name: 'bounce' },
   { type: 'playback', samples: [{ id: 'ViewController.card/position.y', t: 16, v: 301.25 }] },
   { type: 'playback', samples: [], routes: [{ t: 0, route: 'ViewController' }, { t: 900, route: 'DetailViewController', params: { id: 3 } }] },
@@ -139,6 +190,9 @@ const editor: InspectorEditorMessage[] = [
   { type: 'capture', id: 'f2', samples: [] },
   { type: 'scrub', t: 1250 },
   { type: 'scrub', t: null },
+  { type: 'time', scale: 0.1 },
+  { type: 'time', scale: 0, step: 1 },
+  { type: 'time', scale: 0, step: 4 },
   { type: 'apply', edits: [{ file: 'App.tsx', line: 3, column: 2, fn: 'withTiming', path: '1.duration', value: 300 }] },
   { type: 'source', files: ['App.tsx'] },
 ]

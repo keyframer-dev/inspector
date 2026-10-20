@@ -97,3 +97,31 @@ public enum LayerValue {
         return "#" + rgba.map { String(format: "%02x", Int(($0 * 255).rounded())) }.joined()
     }
 }
+
+extension LayerKeyPath {
+    /// Rotations, which Core Animation reads back from the transform through atan2 (between -π and π).
+    public static func isAngle(_ path: String) -> Bool {
+        path.hasSuffix(".rotation") || path.hasSuffix(".rotation.x") || path.hasSuffix(".rotation.y") || path.hasSuffix(".rotation.z")
+    }
+}
+
+/// Unwraps angle samples, one track at a time. Core Animation reads `transform.rotation.z` back
+/// through atan2, so a 0 to 2π spin reads 0, 3.06, -3.00, 0: no travel, and a velocity spike where it
+/// wraps. Each reading continues from the last one by the shortest turn instead, so the spin reads
+/// 0 to 6.28 with its real velocity (QA 0.2.0, N6). It needs a reading at least every half turn,
+/// which any frame rate gives.
+public struct AngleUnwrapper: Sendable {
+    private var last: [String: (raw: Double, unwrapped: Double)] = [:]
+
+    public init() {}
+
+    public mutating func unwrap(_ id: String, _ raw: Double) -> Double {
+        guard let previous = last[id] else {
+            last[id] = (raw, raw)
+            return raw
+        }
+        let value = previous.unwrapped + remainder(raw - previous.raw, 2 * .pi)
+        last[id] = (raw, value)
+        return value
+    }
+}

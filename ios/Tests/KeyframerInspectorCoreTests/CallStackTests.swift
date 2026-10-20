@@ -80,7 +80,7 @@ final class CallStackTests: XCTestCase {
         let site = try XCTUnwrap(resolver.resolve(SymbolFrame.parse(lines: lines)))
         XCTAssertEqual(site.frame.index, 5, "the frame under the animation block, not the glue above kf_add")
         XCTAssertEqual(site.name.display, "closure #1 in ViewController.bounce()")
-        XCTAssertEqual(site.id, "closure #1 in ViewController.bounce()+120")
+        XCTAssertEqual(site.id, "closure #1 in ViewController.bounce()", "no return offset: stable across builds and per property")
         XCTAssertTrue(resolver.isAppFrame(SymbolFrame(index: 0, image: "KeyframerExample", address: 0, symbol: "x", offset: 0)))
         XCTAssertNil(CallSiteResolver(executable: "Other").resolve(SymbolFrame.parse(lines: lines)))
     }

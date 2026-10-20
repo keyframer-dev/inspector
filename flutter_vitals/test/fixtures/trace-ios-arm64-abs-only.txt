@@ -1,0 +1,8 @@
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 812, tid: 6171586560, name io.flutter.1.ui
+os: ios arch: arm64 comp: yes sim: no
+build_id: 'c43d0e9a51f27b8866e0aa1f9b3d2e74'
+isolate_dso_base: 1048a0000, vm_dso_base: 1048a0000
+isolate_instructions: 1048b2000, vm_instructions: 1048a8000
+    #00 abs 0000000104b1c2d4 _kDartIsolateSnapshotInstructions+0x26a2d4
+    #01 abs 0000000104b1b9f0 _kDartIsolateSnapshotInstructions+0x2699f0

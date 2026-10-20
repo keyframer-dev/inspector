@@ -1,0 +1,7 @@
+# QA driver check (Maestro on Android): tap "Open detail", then back. Sheet: 520 ms.
+name: qa maestro detail
+flow: { maestro: .keyframer/qa/flows/qa-detail-maestro.yaml }
+record: { speed: 1, settle: 800ms }
+expect:
+  - value: sheet.translationY
+    duration: 450ms..600ms

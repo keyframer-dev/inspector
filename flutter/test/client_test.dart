@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
@@ -291,6 +293,14 @@ void main() {
     expect(rt.register(c.signal), 'lib/main.dart:10:5');
   });
 
+  test('instances of one call site with names of their own keep them (no "row1 #2")', () {
+    final a = TestValue('row1'), b = TestValue('row2'), c = TestValue('row2');
+    expect(rt.register(a.signal), 'lib/main.dart:10:5');
+    expect(rt.register(b.signal), 'lib/main.dart:10:5#2');
+    expect(rt.register(c.signal), 'lib/main.dart:10:5#3');
+    expect([a.signal.site(rt).name, b.signal.site(rt).name, c.signal.site(rt).name], ['row1', 'row2', 'row2 #3']);
+  });
+
   test('playback writes samples in time order, navigates, and hands values back at the end', () {
     fakeAsync((async) {
       final a = TestValue('a');
@@ -565,5 +575,540 @@ void main() {
     }
     expect(jitter.interval, closeTo(1000 / 60, 0.001));
     expect(jitter.drops, isEmpty);
+  });
+
+  List<Map> markersOf(FakeSocket s) => [
+    for (final b in s.ofType('samples')) ...((b['markers'] as List?) ?? const []).cast<Map>(),
+  ];
+
+  test('a host with the display, motion settings and clock says so in its hello', () {
+    fakeAsync((async) {
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final hello = connector.last.sent.first;
+      expect(hello['capabilities'], [
+        'playback',
+        'overrides',
+        'replay',
+        'scenarios',
+        'capture',
+        'time',
+        'widget-sites',
+      ]);
+      expect(hello['display'], {'hz': 120, 'adaptive': true});
+      expect(hello['accessibility'], {'reduceMotion': false});
+      client.dispose();
+    });
+  });
+
+  test('time: speed, pause and step through the host, every message answered, marked while recording', () {
+    fakeAsync((async) {
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
+      s.receive({'type': 'time', 'scale': 0.25});
+      async.flushMicrotasks();
+      expect(full.scales, [0.25]);
+      expect(s.ofType('time'), [
+        {'type': 'time', 'scale': 0.25},
+      ]);
+      // Recording from a slowed app: the recording's clock says so from its start.
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.elapse(const Duration(milliseconds: 40));
+      s.receive({'type': 'time', 'scale': 0, 'step': 2});
+      async.elapse(const Duration(milliseconds: 20));
+      s.receive({'type': 'time', 'scale': 0, 'step': 1});
+      async.flushMicrotasks();
+      expect(full.scales, [0.25, 0]);
+      expect(full.steps, [2, 1]);
+      s.receive({'type': 'time', 'scale': 1, 'step': 5});
+      async.elapse(const Duration(milliseconds: 100));
+      // Steps only count while paused.
+      expect(full.steps, [2, 1]);
+      expect(s.ofType('time').map((m) => m['scale']), [0.25, 0, 0, 1]);
+      expect(markersOf(s).where((m) => m['kind'] == 'time'), [
+        {'kind': 'time', 't': 0, 'scale': 0.25},
+        {'kind': 'time', 't': 40, 'scale': 0},
+        // Each step, with the frames it advanced.
+        {'kind': 'time', 't': 40, 'scale': 0, 'step': 2},
+        {'kind': 'time', 't': 60, 'scale': 0, 'step': 1},
+        {'kind': 'time', 't': 60, 'scale': 1},
+      ]);
+      expect(client.timeScale, 1);
+      client.dispose();
+    });
+  });
+
+  test('time goes back to normal when the last editor leaves or the relay goes away', () {
+    fakeAsync((async) {
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      var s = connector.last;
+      s.receive({'type': 'presence', 'app': true, 'editors': 2, 'cli': false});
+      s.receive({'type': 'time', 'scale': 0.5});
+      async.flushMicrotasks();
+      // An editor that joins later is told the speed with the catalog.
+      s.sent.clear();
+      s.receive({'type': 'hello', 'role': 'editor'});
+      async.flushMicrotasks();
+      expect(s.ofType('time').single, {'type': 'time', 'scale': 0.5});
+      s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
+      async.flushMicrotasks();
+      expect(full.scale, 0.5);
+      s.sent.clear();
+      s.receive({'type': 'presence', 'app': true, 'editors': 0, 'cli': false});
+      async.flushMicrotasks();
+      expect(full.scale, 1);
+      // And says so.
+      expect(s.ofType('time'), [
+        {'type': 'time', 'scale': 1},
+      ]);
+      // Every reset is announced, at normal speed already too.
+      s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
+      s.receive({'type': 'presence', 'app': true, 'editors': 0, 'cli': false});
+      async.flushMicrotasks();
+      expect(s.ofType('time'), [
+        {'type': 'time', 'scale': 1},
+        {'type': 'time', 'scale': 1},
+      ]);
+      s.receive({'type': 'time', 'scale': 0});
+      async.flushMicrotasks();
+      expect(full.scale, 0);
+      s.drop();
+      async.flushMicrotasks();
+      expect(full.scale, 1);
+      async.elapse(const Duration(seconds: 1));
+      s = connector.last;
+      // Reset while disconnected: said right after the next hello.
+      expect(s.sent.map((m) => m['type']).take(2), ['hello', 'time']);
+      expect(s.ofType('time').single, {'type': 'time', 'scale': 1});
+      s.receive({'type': 'time', 'scale': 0.1});
+      async.flushMicrotasks();
+      client.dispose();
+      async.flushMicrotasks();
+      expect(full.scales.last, 1);
+    });
+  });
+
+  test('time follows the rules every SDK shares', () {
+    fakeAsync((async) {
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      Object? answer(Map<String, Object?> msg) {
+        s.sent.clear();
+        s.receive({'type': 'time', ...msg});
+        async.flushMicrotasks();
+        return s.ofType('time').single['scale'];
+      }
+
+      // Above 1 is 1 (the speed already: the host is not asked), between 0 and 0.01 is 0.01.
+      expect(answer({'scale': 9}), 1);
+      expect(answer({'scale': 0.5}), 0.5);
+      expect(answer({'scale': 0.001}), 0.01);
+      // Not a speed: nothing changes, and it is still answered.
+      expect(answer({'scale': -1}), 0.01);
+      expect(answer({'scale': 'fast'}), 0.01);
+      expect(answer({}), 0.01);
+      expect(full.scales, [0.5, 0.01]);
+      // Not paused: a step does nothing.
+      expect(answer({'step': 3}), 0.01);
+      // Paused: whole frames from 1 to 120; a step that is not a positive number is none.
+      expect(answer({'scale': 0, 'step': 2.7}), 0);
+      expect(answer({'scale': 0, 'step': 500}), 0);
+      expect(answer({'scale': 0, 'step': 0.4}), 0);
+      expect(answer({'step': 2}), 0);
+      expect(answer({'scale': 0, 'step': 0}), 0);
+      expect(answer({'scale': 0, 'step': -3}), 0);
+      expect(answer({'scale': 'x', 'step': 'two'}), 0);
+      // A step with a speed: the speed first, so not paused any more and no step.
+      expect(answer({'scale': 0.5, 'step': 3}), 0.5);
+      expect(full.steps, [3, 120, 1, 2]);
+      // Disposed while slowed: back to normal, and it says so before the socket closes.
+      s.sent.clear();
+      client.dispose();
+      async.flushMicrotasks();
+      expect(s.ofType('time'), [
+        {'type': 'time', 'scale': 1},
+      ]);
+    });
+  });
+
+  test('an app whose host has no clock answers time with speed 1 and does not offer it', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      final s = connector.last;
+      expect(s.sent.first['capabilities'], isNot(contains('time')));
+      expect(s.sent.first.containsKey('display'), isFalse);
+      s.receive({'type': 'time', 'scale': 0.25});
+      async.flushMicrotasks();
+      expect(s.ofType('time').single, {'type': 'time', 'scale': 1});
+      client.dispose();
+    });
+  });
+
+  test('display, motion settings and lifecycle changes while recording are markers', () {
+    fakeAsync((async) {
+      final full = FakeFullHost()..displayNow = const KfDisplay(120);
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.elapse(const Duration(milliseconds: 50));
+      full.displayNow = const KfDisplay(60);
+      full.onDeviceChange!();
+      async.elapse(const Duration(milliseconds: 10));
+      full.accessibilityNow = const KfAccessibility(reduceMotion: true);
+      full.appStateNow = 'background';
+      full.onDeviceChange!();
+      // The same again: nothing new.
+      full.onDeviceChange!();
+      async.elapse(const Duration(milliseconds: 100));
+      expect(markersOf(s).where((m) => m['kind'] != 'navigation'), [
+        {'kind': 'display', 't': 50, 'hz': 60},
+        {'kind': 'accessibility', 't': 60, 'reduceMotion': true},
+        {'kind': 'appState', 't': 60, 'state': 'background'},
+      ]);
+      // The hello an editor gets from now on says what the device says now.
+      expect(client.hello()['display'], {'hz': 60});
+      expect(client.hello()['accessibility'], {'reduceMotion': true});
+      client.dispose();
+    });
+  });
+
+  test('frames are counted against the display: a fixed 120 Hz budget, then 60 Hz after a change', () {
+    fakeAsync((async) {
+      final full = FakeFullHost()..displayNow = const KfDisplay(120);
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.flushMicrotasks();
+      // 60 fps on a fixed 120 Hz display: every frame misses a refresh.
+      for (var i = 0; i < 20; i++) {
+        async.elapse(const Duration(microseconds: 16667));
+        full.onFrame!();
+      }
+      full.displayNow = const KfDisplay(60);
+      full.onDeviceChange!();
+      for (var i = 0; i < 20; i++) {
+        async.elapse(const Duration(microseconds: 16667));
+        full.onFrame!();
+      }
+      async.elapse(const Duration(milliseconds: 100));
+      final drops = [
+        for (final b in s.ofType('samples')) ...((b['drops'] as List?) ?? const []).cast<Map>(),
+      ].where((d) => d['thread'] == 'js');
+      expect(drops, hasLength(19));
+      expect(drops.every((d) => (d['t'] as int) <= 334), isTrue);
+      client.dispose();
+    });
+  });
+
+  test('the scene: watched while recording, visibility as markers, render hints once and in the catalog', () {
+    fakeAsync((async) {
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      expect(full.onVisibility, isNull);
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.elapse(const Duration(milliseconds: 30));
+      full.onVisibility!('lib/main.dart:10:5', false, 'offscreen');
+      full.onHint!(const KfRenderHint('lib/main.dart:10:5', 'opacity-widget', 'Opacity at lib/main.dart:40'));
+      full.onHint!(const KfRenderHint('lib/main.dart:10:5', 'opacity-widget', 'again'));
+      async.elapse(const Duration(milliseconds: 100));
+      expect(markersOf(s).where((m) => m['kind'] == 'visibility'), [
+        {'kind': 'visibility', 't': 30, 'id': 'lib/main.dart:10:5', 'visible': false, 'reason': 'offscreen'},
+      ]);
+      expect(s.events.where((e) => e['kind'] == 'renderHint'), [
+        {
+          'kind': 'renderHint',
+          'id': 'lib/main.dart:10:5',
+          'hint': 'opacity-widget',
+          'detail': 'Opacity at lib/main.dart:40',
+        },
+      ]);
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': false,
+      });
+      async.flushMicrotasks();
+      expect(full.onVisibility, isNull);
+      // An editor that joins later gets the hint with the catalog.
+      s.sent.clear();
+      s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
+      async.flushMicrotasks();
+      expect(s.events.where((e) => e['kind'] == 'renderHint'), hasLength(1));
+      client.dispose();
+    });
+  });
+
+  test('frame meter with a display: fixed rates are the budget, adaptive ones are learned up to the display', () {
+    // A fixed 120 Hz display: a 16.7 ms frame missed one refresh.
+    final fixed = FrameMeter('js', display: const KfDisplay(120));
+    for (var i = 0; i <= 30; i++) {
+      fixed.tick(i * (1000 / 60));
+    }
+    expect(fixed.interval, closeTo(1000 / 120, 1e-9));
+    expect(fixed.drops, hasLength(30));
+    // ProMotion running at 60: learned, no drops.
+    final adaptive = FrameMeter('js', display: const KfDisplay(120, adaptive: true));
+    for (var i = 0; i <= 30; i++) {
+      adaptive.tick(i * (1000 / 60));
+    }
+    expect(adaptive.interval, closeTo(1000 / 60, 1e-9));
+    // A 90 Hz adaptive display never learns 120 Hz.
+    final ninety = FrameMeter('js', display: const KfDisplay(90, adaptive: true));
+    for (var i = 0; i <= 40; i++) {
+      ninety.tick(i * (1000 / 120));
+    }
+    expect(ninety.interval, closeTo(1000 / 90, 1e-9));
+    // A 30 Hz display: 33 ms frames are on time.
+    final slow = FrameMeter('js', display: const KfDisplay(30));
+    for (var i = 0; i <= 20; i++) {
+      slow.tick(i * (1000 / 30));
+    }
+    expect(slow.drops, isEmpty);
+    // The rate changes mid-recording.
+    fixed.display = const KfDisplay(60);
+    expect(fixed.interval, closeTo(1000 / 60, 1e-9));
+  });
+
+  test('the hello names the device, once it is known (at most 2 s)', () {
+    fakeAsync((async) {
+      final known = Completer<KfDevice?>();
+      final client = KfInspectorClient(
+        url: relayAppUrl(app: 'Demo', platform: 'android'),
+        connector: connector.call,
+        app: 'Demo',
+        platform: 'android',
+        host: host,
+        runtime: rt,
+        device: known.future,
+        now: () => async.elapsed.inMicroseconds / 1000,
+      )..start();
+      async.elapse(const Duration(milliseconds: 50));
+      expect(connector.sockets, isEmpty);
+      known.complete(
+        const KfDevice(id: 'Pixel_8_API_35', name: 'Pixel_8_API_35', model: 'sdk_gphone64_arm64', simulator: true),
+      );
+      async.flushMicrotasks();
+      expect(connector.last.sent.first['device'], {
+        'name': 'Pixel_8_API_35',
+        'model': 'sdk_gphone64_arm64',
+        'id': 'Pixel_8_API_35',
+        'simulator': true,
+      });
+      client.dispose();
+    });
+  });
+
+  test('a device that never says goes unnamed, and the hello waits no longer than 2 s', () {
+    fakeAsync((async) {
+      final client = KfInspectorClient(
+        url: relayAppUrl(app: 'Demo', platform: 'ios'),
+        connector: connector.call,
+        app: 'Demo',
+        platform: 'ios',
+        host: host,
+        runtime: rt,
+        device: Completer<KfDevice?>().future,
+      )..start();
+      async.elapse(const Duration(milliseconds: 1900));
+      expect(connector.sockets, isEmpty);
+      async.elapse(const Duration(milliseconds: 200));
+      expect(connector.last.sent.first['type'], 'hello');
+      expect(connector.last.sent.first.containsKey('device'), isFalse);
+      client.dispose();
+    });
+  });
+
+  test('recorders: two editors record at once, and one stopping leaves the other recording', () {
+    fakeAsync((async) {
+      final a = TestValue('a'), b = TestValue('b', line: 20);
+      rt.register(a.signal);
+      rt.register(b.signal);
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      final s = connector.last;
+      void record(List<String> ids, bool on, [String? recorder]) {
+        s.receive({'type': 'record', 'signalIds': ids, 'on': on, if (recorder != null) 'recorder': recorder});
+        async.flushMicrotasks();
+      }
+
+      s.receive({'type': 'presence', 'app': true, 'editors': 2, 'cli': false});
+      record(['lib/main.dart:10:5'], true, 'panel');
+      async.elapse(const Duration(milliseconds: 100));
+      record(['*'], true, 'ci');
+      // The second recorder does not restart the recording's clock.
+      expect(host.onFrame, isNotNull);
+      async.elapse(const Duration(milliseconds: 16));
+      host.onFrame!();
+      async.elapse(const Duration(milliseconds: 100));
+      final both = (s.ofType('samples').last['samples'] as List).cast<Map>();
+      expect(both.map((x) => x['id']).toSet(), {'lib/main.dart:10:5', 'lib/main.dart:20:5'});
+      expect(both.first['t'], 116);
+      // An editor with no id stops only the anonymous recorder: there is none.
+      record(['*'], false);
+      // ci stops: the panel's value is still recorded, ci's other one is not.
+      record(['*'], false, 'ci');
+      expect(client.recording, isTrue);
+      s.sent.clear();
+      async.elapse(const Duration(milliseconds: 16));
+      host.onFrame!();
+      async.elapse(const Duration(milliseconds: 100));
+      final one = [for (final m in s.ofType('samples')) ...(m['samples'] as List).cast<Map>()];
+      expect(one.map((x) => x['id']).toSet(), {'lib/main.dart:10:5'});
+      // The last editor leaves: every recorder goes.
+      s.receive({'type': 'presence', 'app': true, 'editors': 0, 'cli': false});
+      async.flushMicrotasks();
+      expect(client.recording, isFalse);
+      expect(host.onFrame, isNull);
+      client.dispose();
+    });
+  });
+
+  test('recorders: a dropped connection clears them all', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      final s = connector.last;
+      for (final r in ['panel', 'mcp', null]) {
+        s.receive({
+          'type': 'record',
+          'signalIds': ['*'],
+          'on': true,
+          if (r != null) 'recorder': r,
+        });
+      }
+      async.flushMicrotasks();
+      expect(client.recording, isTrue);
+      s.drop();
+      async.flushMicrotasks();
+      expect(client.recording, isFalse);
+      expect(host.onFrame, isNull);
+      // The next connection starts with no recorder: one stopping does not leave others behind.
+      async.elapse(const Duration(seconds: 1));
+      final next = connector.last;
+      next.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+        'recorder': 'ci',
+      });
+      next.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': false,
+        'recorder': 'ci',
+      });
+      async.flushMicrotasks();
+      expect(client.recording, isFalse);
+      client.dispose();
+    });
+  });
+
+  test('editors without a recorder id share one anonymous recorder, as before', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      final s = connector.last;
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+        'recorder': 'mcp',
+      });
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': false,
+      });
+      async.flushMicrotasks();
+      expect(client.recording, isTrue);
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': false,
+        'recorder': 'mcp',
+      });
+      async.flushMicrotasks();
+      expect(client.recording, isFalse);
+      client.dispose();
+    });
+  });
+
+  test('values that mount or go while recording say when; the catalog stays timeless', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      final s = connector.last;
+      final before = TestValue('before');
+      rt.register(before.signal);
+      async.elapse(const Duration(milliseconds: 100));
+      expect(s.events.single.containsKey('t'), isFalse);
+      s.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.elapse(const Duration(milliseconds: 40));
+      final late = TestValue('late', line: 30);
+      rt.register(late.signal);
+      async.elapse(const Duration(milliseconds: 60));
+      rt.unregister(late.signal);
+      async.elapse(const Duration(milliseconds: 100));
+      final events = s.events.skip(1).toList();
+      expect(events.map((e) => [e['kind'], e['t']]), [
+        ['signal', 40],
+        ['unsignal', 100],
+      ]);
+      // An editor joining later gets the catalog without recording times.
+      rt.register(late.signal);
+      s.sent.clear();
+      s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
+      async.flushMicrotasks();
+      expect(s.ofType('events').first['events'], everyElement(isNot(contains('t'))));
+      client.dispose();
+    });
+  });
+
+  test('without widget creation tracking the hello does not offer widget-sites', () {
+    fakeAsync((async) {
+      final full = FakeFullHost()..sites = false;
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      expect(connector.last.sent.first['capabilities'], isNot(contains('widget-sites')));
+      client.dispose();
+    });
   });
 }

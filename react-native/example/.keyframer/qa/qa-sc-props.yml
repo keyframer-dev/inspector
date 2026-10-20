@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: animations from props (a CSS pulse, a CSS transition, entering and exiting chips, a layout
+# transition) and a list scrolled by a plain JS onScroll. Nothing here is a shared value: only the run
+# itself is checked.
+name: qa from props
+flow:
+  scenario: "from props: css, layout animations and a js list"
+record:
+  settle: 900ms
+expect:
+  - frames: { dropped: < 12 }
+  - none: [reduce-motion, two-writers, jump, error]

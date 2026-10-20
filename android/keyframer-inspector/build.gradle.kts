@@ -11,6 +11,8 @@ android {
     defaultConfig {
         minSdk = 24
         consumerProguardFiles("consumer-rules.pro")
+        // On a device or emulator: ./gradlew :keyframer-inspector:connectedDebugAndroidTest
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -27,4 +29,9 @@ kotlin {
 
 dependencies {
     api(project(":keyframer-inspector-core"))
+
+    // Time control, render hints and visibility against real animators and views.
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
 }

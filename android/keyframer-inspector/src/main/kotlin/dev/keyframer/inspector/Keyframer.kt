@@ -4,8 +4,8 @@ import android.animation.Animator
 import android.app.Activity
 import android.app.Application
 import android.content.pm.ApplicationInfo
-import android.os.Build
 import android.util.Log
+import android.view.View
 import dev.keyframer.inspector.core.CallSites
 import dev.keyframer.inspector.core.InspectorSession
 import dev.keyframer.inspector.core.OkHttpSockets
@@ -47,12 +47,19 @@ data class KeyframerConfig(
  *
  * Every call is cheap and does nothing when the inspector is not running (a release build).
  * Call it on the main thread; calls from other threads hop onto it.
+ *
+ * Jetpack Compose: add keyframer-inspector-compose (and its no-op for release builds); it is found and
+ * installed by [start].
  */
 object Keyframer {
     private const val TAG = "Keyframer"
 
+    /** keyframer-inspector-compose's entry point, looked up by name so this module does not depend on Compose. */
+    private const val COMPOSE = "dev.keyframer.inspector.compose.KeyframerCompose"
+
     private var session: InspectorSession? = null
     private var host: AndroidHost? = null
+    private var time: TimeControl? = null
     private var app: Application? = null
     private var config = KeyframerConfig()
     private val animators = AnimatorTracker { session }
@@ -80,14 +87,35 @@ object Keyframer {
         h.replayer = replayer
         application.registerActivityLifecycleCallbacks(h)
         host = h
+        val t = TimeControl({ animators.runningRoots() }, { h.refreshRate() }, { h.animatorScaleSetting() })
+        time = t
+        h.time = t
+        h.visibilityTargets = { animators.visibilityTargets() + signals.mapNotNull { it.viewTarget() } }
+        animators.topWindow = { h.topActivity?.window }
+        h.startWatching()
         val url = InspectorSession.relayUrl(config.host ?: defaultHost(), config.port, name)
         val s = InspectorSession(url, OkHttpSockets(), MainScheduler, AndroidClock, h)
         s.onOverrides = { animators.applyOverrides(it) }
         session = s
         for ((n, sc) in scenarios) unregister[n] = s.registerScenario(n, sc)
         pendingRoute?.let { (r, p) -> h.setRoute(r, p) }
+        installCompose()
         s.start()
         Log.i(TAG, "inspector connecting to $url")
+    }
+
+    /** keyframer-inspector-compose, when the app has it: its hello says "compose" and its clock joins `time`. */
+    private fun installCompose() {
+        val cls = try {
+            Class.forName(COMPOSE)
+        } catch (_: Throwable) {
+            return
+        }
+        try {
+            cls.getMethod("install").invoke(null)
+        } catch (e: Throwable) {
+            Log.w(TAG, "keyframer-inspector-compose did not install: ${e.cause ?: e}")
+        }
     }
 
     /** Disconnects and forgets everything tracked. */
@@ -95,8 +123,12 @@ object Keyframer {
     fun stop() = onMain {
         session?.dispose()
         session = null
-        host?.let { app?.unregisterActivityLifecycleCallbacks(it) }
+        host?.let {
+            app?.unregisterActivityLifecycleCallbacks(it)
+            it.dispose()
+        }
         host = null
+        time = null
         animators.clear()
         signals.clear()
         unregister.clear()
@@ -113,6 +145,19 @@ object Keyframer {
         if (session == null) return animator
         val stack = Throwable().stackTrace
         onMain { animators.track(animator, name, host?.currentActivity, stack, config.libraryPrefixes) }
+        return animator
+    }
+
+    /**
+     * [track], for an animator that moves `view` through its own update listener (a ValueAnimator):
+     * the view is watched for visibility while recording and checked for render hints, as an
+     * ObjectAnimator's target is.
+     */
+    @JvmStatic
+    fun <T : Animator> track(animator: T, name: String?, view: View?): T {
+        if (session == null) return animator
+        val stack = Throwable().stackTrace
+        onMain { animators.track(animator, name, host?.currentActivity, stack, config.libraryPrefixes, view) }
         return animator
     }
 
@@ -138,9 +183,24 @@ object Keyframer {
     @JvmOverloads
     fun signal(name: String, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? {
         if (session == null) return null
-        val at = CallSites.firstAppFrame(Throwable().stackTrace, config.libraryPrefixes)?.let { CallSites.site(it) } ?: return null
+        return addSignal(name, null, read, write, Throwable().stackTrace)
+    }
+
+    /**
+     * [signal] for a value that moves `view`: while recording, the panel also hears when the view stops
+     * being visible (scrolled away, covered, hidden, detached) and when it comes back.
+     */
+    @JvmStatic
+    @JvmOverloads
+    fun signal(name: String, view: View?, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? {
+        if (session == null) return null
+        return addSignal(name, view, read, write, Throwable().stackTrace)
+    }
+
+    private fun addSignal(name: String, view: View?, read: () -> Float, write: ((Float) -> Unit)?, stack: Array<StackTraceElement>): Signal? {
+        val at = CallSites.firstAppFrame(stack, config.libraryPrefixes)?.let { CallSites.site(it) } ?: return null
         val site = SignalSite("${at.id}:$name", at.file, at.line, at.component, name, column = 0, writable = if (write == null) false else null)
-        val sig = OwnedSignal(site, read, write, WeakReference(host?.currentActivity))
+        val sig = OwnedSignal(site, read, write, WeakReference(host?.currentActivity), view?.let { WeakReference(it) })
         onMain {
             signals.removeAll { it.site.id == sig.site.id }
             signals.add(sig)
@@ -200,23 +260,39 @@ object Keyframer {
 
     private fun defaultHost(): String = if (isEmulator()) "10.0.2.2" else "127.0.0.1"
 
-    private fun isEmulator(): Boolean =
-        Build.FINGERPRINT.startsWith("generic") || Build.FINGERPRINT.contains("emulator") || Build.FINGERPRINT.contains("sdk_gphone") ||
-            Build.MODEL.contains("Emulator") || Build.MODEL.contains("Android SDK built for") || Build.HARDWARE.contains("ranchu") ||
-            Build.HARDWARE.contains("goldfish") || Build.PRODUCT.contains("sdk")
+    private fun isEmulator(): Boolean = DeviceProbe.buildLooksLikeEmulator()
 
     private class OwnedSignal(
         override val site: SignalSite,
         private val reader: () -> Float,
         private val writer: ((Float) -> Unit)?,
         val owner: WeakReference<Activity?>,
+        private val view: WeakReference<View>?,
     ) : Signal {
         override fun read(): Double? = runCatching { reader().toString().toDouble() }.getOrNull()
         override fun write(v: Double) {
             writer?.invoke(v.toFloat())
         }
+
+        /** Signals are few and moved by hand: their views are checked whenever the recording checks. */
+        fun viewTarget(): ViewTarget? = view?.get()?.let { ViewTarget(listOf(site.id), it, active = true) }
+    }
+
+    // ── for keyframer-inspector-compose (see KeyframerExtensions) ────────────────────────────────────
+
+    internal val sessionOrNull: InspectorSession? get() = session
+    internal val timeClock get() = time?.clock
+    internal val libraryPrefixes: List<String> get() = config.libraryPrefixes
+    internal fun setFramework(name: String) {
+        host?.framework = name
     }
 }
 
 /** `ObjectAnimator.ofFloat(...).kfTrack("title").start()`: see [Keyframer.track]. */
 fun <T : Animator> T.kfTrack(name: String? = null): T = Keyframer.track(this, name)
+
+/**
+ * `ValueAnimator.ofFloat(1f, 1.3f).apply { addUpdateListener { ... } }.kfTrack("pulse", pulse).start()`:
+ * see [Keyframer.track], with the view the animator moves.
+ */
+fun <T : Animator> T.kfTrack(name: String?, view: View): T = Keyframer.track(this, name, view)

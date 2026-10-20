@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the carousel swiped two pages right and back to the first, from outside. Paging snaps to each
+# card without passing it. The dots animate their width: that layout hint is expected.
+name: qa steps carousel
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/carousel
+    - wait: { id: carousel }
+      timeout: 15s
+    - scroll: right
+    - wait: 700ms
+    - scroll: right
+    - wait: 700ms
+    - scroll: left
+    - wait: 700ms
+    - scroll: left
+    - wait: 700ms
+record:
+  settle: 600ms
+expect:
+  - value: scrollX
+    overshoot: < 2%
+  - none: [reduce-motion, unseen, two-writers, jump, error]

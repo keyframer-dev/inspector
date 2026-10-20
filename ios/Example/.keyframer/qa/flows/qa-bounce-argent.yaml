@@ -1,0 +1,4 @@
+executionPrerequisite: The UIKit example is open on the Cards screen
+steps:
+  - tap: { id: bounce }
+  - wait: 1200

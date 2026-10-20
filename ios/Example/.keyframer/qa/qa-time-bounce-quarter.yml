@@ -1,0 +1,10 @@
+# QA time-control check at 0.25x, read on the app clock (passes today): UIView.animate spring, damping 0.55, 600 ms, 160 pt.
+# Theory: overshoot e^(-0.55π/√(1-0.55²)) = 12.6%. Measured 12.9-13.0% (1x), 12.6-12.7% (0.25x).
+name: qa time bounce 0.25x
+flow: { scenario: bounce }
+record: { speed: 0.25, settle: 3500ms }
+expect:
+  - value: card.position.y
+    duration: 450ms..900ms
+    overshoot: 10%..15%
+  - none: [reduce-motion, unseen, two-writers, jump]

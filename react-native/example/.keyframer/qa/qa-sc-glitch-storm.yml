@@ -1,0 +1,8 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (glitch lab): 40 renders of 400 views, one per frame. Expected: a render storm in Glitches/Storm.
+name: qa glitch render storm
+flow:
+  scenario: "glitch lab: render storm"
+expect:
+  - frames: { js: "> 5" }
+  - none: [reduce-motion, two-writers, jump, error]

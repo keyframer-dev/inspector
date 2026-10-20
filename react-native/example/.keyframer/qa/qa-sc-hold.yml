@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: hold to delete, held 1.3 s: fill is withTiming(1, { duration: 900 }) (within 2% at 810 ms),
+# then gone is withTiming(1, { duration: 260 }) (234 ms), then the row remounts. fill animates a width,
+# so that layout hint is expected. Values as Component.name (R15): a bare "fill" is also the motion
+# checks screen's (Costly), and a name matches every value called that, on any screen still mounted. duration runs to within 0.1% of
+# the end: about a frame short of 900 ms for an inOut timing.
+name: qa hold to delete
+flow:
+  scenario: "long press: hold to delete"
+record:
+  settle: 900ms
+expect:
+  - value: HoldToDelete.fill
+    duration: 860ms..930ms
+    settle: 790ms..835ms
+    overshoot: < 1%
+  - value: HoldToDelete.gone
+    duration: 250ms..285ms
+    settle: 220ms..250ms
+  - none: [reduce-motion, two-writers, jump, error]

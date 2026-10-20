@@ -14,6 +14,7 @@ const FLOWS: { href: Href; title: string; body: string; color: string }[] = [
   { href: '/props', title: 'From props', body: 'A CSS pulse, a CSS transition, chips that zoom in and fade out, and a list with a plain JS onScroll.', color: '#3a86ff' },
   { href: '/carousel', title: 'Carousel', body: 'Paging cards that scale and fade with the scroll position.', color: '#c2417b' },
   { href: '/glitches', title: 'Glitch lab', body: 'Drops frames on purpose: a blocked JS thread, a render storm, a busy UI thread, errors.', color: colors.red },
+  { href: '/checks', title: 'Motion checks', body: 'Works, and is still a mistake: ignores Reduce Motion, loops under another screen, two animations on one value.', color: '#7a4fd6' },
 ]
 
 function FlowCard({ index, flow }: { index: number; flow: (typeof FLOWS)[number] }) {

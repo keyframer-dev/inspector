@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (motion checks): one press starts withTiming(160) on x (app/checks.tsx:90) and, through a reaction
+# to kick, withSpring(0, { damping: 6 }) on x (app/checks.tsx:76): two writers are expected. The spring
+# wins at once, so x hardly moves and nothing visibly jumps.
+name: qa checks two writers
+flow:
+  scenario: "motion checks: two animations on one value"
+expect:
+  - none: [reduce-motion, unseen, jump, error]

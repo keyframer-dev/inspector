@@ -1,0 +1,32 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (several devices): qa steps sheet on an iPhone simulator and an Android emulator side by side.
+# Same springs on both (about 1.9% overshoot, within 2% about 230 ms in). QA ran it on its own iOS 26.5
+# simulator and API 34 emulator; the names below are this machine's: change them to yours. Close the
+# app on both before the run (ci matches each app to its device by the one that joins next).
+#   keyframer-inspect ci --relay ws://127.0.0.1:8790 --launch exp://127.0.0.1:8082 --scenarios "qa matrix sheet"
+name: qa matrix sheet
+targets:
+  - { driver: agent-device, device: "iPhone 16 Pro", platform: ios, app: host.exp.Exponent }
+  - { driver: agent-device, device: Pixel_4_API_VanillaIceCream, platform: android, app: host.exp.exponent }
+flow:
+  steps:
+    # A bare link, not open: "Expo Go" with url: agent-device finds no app named "Expo Go" on Android
+    # (its package is host.exp.exponent), so the README's form fails there.
+    - open: exp://127.0.0.1:8082/--/sheet
+    - wait: { id: sheet-open-half }
+      timeout: 20s
+    - tap: sheet-open-half
+    - wait: 900ms
+    - tap: sheet-open-full
+    - wait: 900ms
+    - tap: sheet-close
+    - wait: 900ms
+record:
+  settle: 600ms
+expect:
+  - value: sheetY
+    overshoot: < 3%
+    settle: 180ms..320ms
+    velocity: 4000/s..5600/s
+  - frames: { dropped: < 12 }
+  - none: [reduce-motion, unseen, two-writers, jump, error]

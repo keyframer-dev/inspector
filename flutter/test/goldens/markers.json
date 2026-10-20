@@ -1,0 +1,39 @@
+{
+  "type": "samples",
+  "samples": [],
+  "markers": [
+    {
+      "kind": "time",
+      "t": 366,
+      "scale": 0.25
+    },
+    {
+      "kind": "display",
+      "t": 376,
+      "hz": 60
+    },
+    {
+      "kind": "accessibility",
+      "t": 376,
+      "reduceMotion": true
+    },
+    {
+      "kind": "appState",
+      "t": 376,
+      "state": "background"
+    },
+    {
+      "kind": "visibility",
+      "t": 376,
+      "id": "lib/main.dart:31:5",
+      "visible": false,
+      "reason": "covered"
+    },
+    {
+      "kind": "visibility",
+      "t": 376,
+      "id": "lib/main.dart:31:5",
+      "visible": true
+    }
+  ]
+}

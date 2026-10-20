@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (slowed recording): qa welcome entrance recorded at a quarter of the speed. Motion is read on the
+# app's clock, so every number must match the 1x check within a frame or two. The scenario's own waits
+# are real time (700 ms is 175 ms of animation here), so only the remounted entrance runs whole: the
+# recording keeps going 2.25 s of animation (9 s real: settle is on the app's clock, R6a) past the
+# scenario for it.
+name: qa slow welcome entrance
+flow:
+  scenario: "welcome: replay the entrance"
+record:
+  speed: 0.25
+  settle: 2250ms
+expect:
+  - value: logoScale
+    overshoot: 25%..32%
+    settle: 1.4s..1.8s
+  - value: cardY
+    duration: 400ms..440ms
+    settle: 360ms..400ms
+    overshoot: < 1%
+  - value: cardOpacity
+    duration: 285ms..320ms
+    settle: 255ms..290ms
+  - value: badge
+    overshoot: 6%..9%
+    settle: 1.6s..2s
+  - none: [reduce-motion, unseen, two-writers, jump, error]

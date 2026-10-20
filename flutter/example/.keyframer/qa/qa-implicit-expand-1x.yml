@@ -1,0 +1,14 @@
+# QA regression check, bug 12: implicit animations need widget creation tracking. PASSES on a
+# `flutter run` (or `flutter build macos|apk --debug`) build; FAILS ("did not move") on a
+# `flutter build ios --debug` app, which has TRACK_WIDGET_CREATION=false.
+# AnimatedContainer 450 ms Curves.easeOutBack (measured 8.7% overshoot), AnimatedOpacity 300 ms.
+name: qa implicit expand 1x
+flow: { scenario: expand }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: AnimatedContainer
+    duration: 400ms..500ms
+    overshoot: 6%..12%
+  - value: AnimatedOpacity
+    duration: 250ms..350ms
+  - none: [two-writers, jump]

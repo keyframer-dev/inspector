@@ -1,0 +1,287 @@
+{
+  "format": "keyframer-vitals",
+  "version": 1,
+  "app": {
+    "id": "com.acme.shop",
+    "version": "3.4.0",
+    "build": "412",
+    "platform": "react-native",
+    "framework": "React Native",
+    "environment": "production"
+  },
+  "sdk": {
+    "name": "@keyframerdev/vitals",
+    "version": "0.1.0"
+  },
+  "device": {
+    "os": "android",
+    "osMajor": 14,
+    "model": "SM-A146B",
+    "tier": "low",
+    "memoryGb": 4
+  },
+  "display": {
+    "hz": 90,
+    "adaptive": false,
+    "targetHz": 90
+  },
+  "state": {
+    "lowPower": false,
+    "thermal": "nominal"
+  },
+  "session": {
+    "seq": 0,
+    "sampleRate": 0.1,
+    "foregroundMs": 248000,
+    "measuredMs": 41250,
+    "ended": "background"
+  },
+  "screens": [
+    {
+      "name": "Feed",
+      "ms": 151000,
+      "threads": {
+        "ui": {
+          "frames": 2400,
+          "hist": [
+            2260,
+            81,
+            32,
+            15,
+            7,
+            3,
+            2,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 3611.1,
+          "idleFrames": 610,
+          "idleMissed": 9
+        },
+        "js": {
+          "frames": 2400,
+          "hist": [
+            2190,
+            120,
+            51,
+            22,
+            11,
+            4,
+            1,
+            1
+          ],
+          "frozen": 0,
+          "hitchMs": 5405.6,
+          "idleFrames": 600,
+          "idleMissed": 14
+        }
+      }
+    },
+    {
+      "name": "Product",
+      "ms": 72000,
+      "threads": {
+        "ui": {
+          "frames": 797,
+          "hist": [
+            742,
+            30,
+            12,
+            6,
+            4,
+            2,
+            1,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 1644.4,
+          "idleFrames": 180,
+          "idleMissed": 4
+        },
+        "js": {
+          "frames": 797,
+          "hist": [
+            760,
+            21,
+            9,
+            4,
+            2,
+            1,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 866.7,
+          "idleFrames": 175,
+          "idleMissed": 3
+        }
+      }
+    },
+    {
+      "name": "users/[id]",
+      "ms": 25000,
+      "threads": {
+        "ui": {
+          "frames": 120,
+          "hist": [
+            108,
+            6,
+            2,
+            2,
+            1,
+            1,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 394.4,
+          "idleFrames": 40,
+          "idleMissed": 1
+        },
+        "js": {
+          "frames": 120,
+          "hist": [
+            112,
+            4,
+            2,
+            1,
+            1,
+            0,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 200,
+          "idleFrames": 40,
+          "idleMissed": 0
+        }
+      }
+    }
+  ],
+  "sites": [
+    {
+      "ref": {
+        "kind": "source",
+        "file": "app/feed.tsx",
+        "line": 42,
+        "column": 22
+      },
+      "key": "app/feed.tsx#FeedCard#withSpring#scale#1",
+      "fn": "withSpring",
+      "component": "FeedCard",
+      "prop": "scale",
+      "screen": 0,
+      "runs": 38,
+      "activeMs": 20240,
+      "frames": 1610,
+      "missed": 212,
+      "hitchMs": 2950.4,
+      "worstMs": 161.2
+    },
+    {
+      "ref": {
+        "kind": "source",
+        "file": "app/feed.tsx",
+        "line": 88,
+        "column": 9
+      },
+      "key": "app/feed.tsx#FeedHeader#withTiming#opacity#1",
+      "fn": "withTiming",
+      "component": "FeedHeader",
+      "prop": "opacity",
+      "screen": 0,
+      "runs": 12,
+      "activeMs": 3600,
+      "frames": 290,
+      "missed": 41,
+      "hitchMs": 610.8,
+      "worstMs": 214
+    },
+    {
+      "ref": {
+        "kind": "source",
+        "file": "app/product/[id].tsx",
+        "line": 17,
+        "column": 41
+      },
+      "key": "app/product/[id].tsx#ProductScreen#entering##1",
+      "fn": "entering",
+      "component": "ProductScreen",
+      "prop": null,
+      "screen": 1,
+      "runs": 6,
+      "activeMs": 1800,
+      "frames": 140,
+      "missed": 33,
+      "hitchMs": 402.5,
+      "worstMs": 302.4
+    },
+    {
+      "ref": {
+        "kind": "hashed",
+        "hash": "9f2c4e1a7b30"
+      },
+      "key": "k_51d0a9c3e2f4",
+      "fn": "withRepeat",
+      "component": null,
+      "prop": null,
+      "screen": 0,
+      "runs": 4,
+      "activeMs": 9800,
+      "frames": 870,
+      "missed": 64,
+      "hitchMs": 980.1,
+      "worstMs": 161.2
+    }
+  ],
+  "worst": [
+    {
+      "thread": "ui",
+      "ms": 302.4,
+      "missed": 26,
+      "screen": 1,
+      "sites": [
+        2
+      ],
+      "cause": "screen-mount",
+      "afterNavMs": 310
+    },
+    {
+      "thread": "js",
+      "ms": 214,
+      "missed": 18,
+      "screen": 0,
+      "sites": [
+        1
+      ],
+      "cause": "busy-start"
+    },
+    {
+      "thread": "ui",
+      "ms": 161.2,
+      "missed": 14,
+      "screen": 0,
+      "sites": [
+        0,
+        3
+      ],
+      "cause": "burst"
+    },
+    {
+      "thread": "ui",
+      "ms": 98.6,
+      "missed": 8,
+      "screen": 0,
+      "sites": [],
+      "cause": "scroll"
+    },
+    {
+      "thread": "ui",
+      "ms": 72.3,
+      "missed": 6,
+      "screen": 2,
+      "sites": [],
+      "cause": "unknown"
+    }
+  ]
+}

@@ -184,12 +184,30 @@ public struct InspectorAnimEvent: Codable, Hashable, Sendable {
     }
 }
 
+/// Something about how an animated layer is drawn that costs the render server or the GPU more than it
+/// needs to, seen on the layer itself. `id` is the signal (or call site) it belongs to; `hint` a stable
+/// key the problems engine words a fix for: on iOS "shadow-path", "mask", "blur", "group-opacity" and
+/// "rasterize". Sent once per layer and hint.
+public struct InspectorRenderHint: Codable, Hashable, Sendable {
+    public var id: String
+    public var hint: String
+    /// What the SDK saw, in a few words.
+    public var detail: String?
+
+    public init(id: String, hint: String, detail: String? = nil) {
+        self.id = id
+        self.hint = hint
+        self.detail = detail
+    }
+}
+
 public enum InspectorEvent: Hashable, Sendable {
     case anim(InspectorAnimEvent)
     case signal(InspectorSignalSite)
     /// A value that went away (its layer was freed): it leaves the catalog.
     case unsignal(id: String)
     case style(InspectorStyleSite)
+    case renderHint(InspectorRenderHint)
 }
 
 extension InspectorEvent: Codable {
@@ -202,6 +220,7 @@ extension InspectorEvent: Codable {
         case "signal": self = .signal(try c.decode(InspectorSignalSite.self, forKey: .site))
         case "unsignal": self = .unsignal(id: try c.decode(String.self, forKey: .id))
         case "style": self = .style(try c.decode(InspectorStyleSite.self, forKey: .site))
+        case "renderHint": self = .renderHint(try InspectorRenderHint(from: decoder))
         case let kind: throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "unknown event kind \(kind)")
         }
     }
@@ -221,6 +240,9 @@ extension InspectorEvent: Codable {
         case .style(let s):
             try c.encode("style", forKey: .kind)
             try c.encode(s, forKey: .site)
+        case .renderHint(let h):
+            try c.encode("renderHint", forKey: .kind)
+            try h.encode(to: encoder)
         }
     }
 }
@@ -275,6 +297,12 @@ public struct InspectorRoute: Codable, Hashable, Sendable {
 
 public enum TouchPhase: String, Codable, Hashable, Sendable {
     case start, move, end, cancel
+}
+
+/// Why an animated value's view cannot be seen: scrolled or moved out of the window (`offscreen`),
+/// hidden or at alpha 0 (`hidden`), removed from the window (`detached`), under another screen (`covered`).
+public enum InspectorVisibilityReason: String, Codable, Hashable, Sendable {
+    case offscreen, hidden, detached, covered
 }
 
 /// Something that happened while recording besides motion. Coordinates are screen points.
@@ -392,6 +420,57 @@ public enum InspectorMarker: Hashable, Sendable {
         }
     }
 
+    /// Reduce Motion changed while recording.
+    public struct Accessibility: Codable, Hashable, Sendable {
+        public var t: Double
+        public var reduceMotion: Bool
+
+        public init(t: Double, reduceMotion: Bool) {
+            self.t = t
+            self.reduceMotion = reduceMotion
+        }
+    }
+
+    /// The display's top refresh rate changed while recording (Low Power Mode caps ProMotion at 60 Hz).
+    public struct Display: Codable, Hashable, Sendable {
+        public var t: Double
+        public var hz: Double
+
+        public init(t: Double, hz: Double) {
+            self.t = t
+            self.hz = hz
+        }
+    }
+
+    /// An animated value's view left the screen or came back. `id` is a signal id.
+    public struct Visibility: Codable, Hashable, Sendable {
+        public var t: Double
+        public var id: String
+        public var visible: Bool
+        public var reason: InspectorVisibilityReason?
+
+        public init(t: Double, id: String, visible: Bool, reason: InspectorVisibilityReason? = nil) {
+            self.t = t
+            self.id = id
+            self.visible = visible
+            self.reason = reason
+        }
+    }
+
+    /// The editor changed the app's animation speed: durations after it are stretched by 1 / scale.
+    /// `step`, while paused: the app advanced this many frames at once, at `t`.
+    public struct Time: Codable, Hashable, Sendable {
+        public var t: Double
+        public var scale: Double
+        public var step: Double?
+
+        public init(t: Double, scale: Double, step: Double? = nil) {
+            self.t = t
+            self.scale = scale
+            self.step = step
+        }
+    }
+
     case touch(Touch)
     case navigation(Navigation)
     case appState(AppState)
@@ -399,6 +478,10 @@ public enum InspectorMarker: Hashable, Sendable {
     case log(Log)
     case note(Note)
     case gesture(Gesture)
+    case accessibility(Accessibility)
+    case display(Display)
+    case visibility(Visibility)
+    case time(Time)
 }
 
 extension InspectorMarker: Codable {
@@ -414,6 +497,10 @@ extension InspectorMarker: Codable {
         case "log": self = .log(try Log(from: decoder))
         case "note": self = .note(try Note(from: decoder))
         case "gesture": self = .gesture(try Gesture(from: decoder))
+        case "accessibility": self = .accessibility(try Accessibility(from: decoder))
+        case "display": self = .display(try Display(from: decoder))
+        case "visibility": self = .visibility(try Visibility(from: decoder))
+        case "time": self = .time(try Time(from: decoder))
         case let kind: throw DecodingError.dataCorruptedError(forKey: .kind, in: c, debugDescription: "unknown marker kind \(kind)")
         }
     }
@@ -429,6 +516,10 @@ extension InspectorMarker: Codable {
         case .log(let m): try c.encode("log", forKey: .kind); payload = m
         case .note(let m): try c.encode("note", forKey: .kind); payload = m
         case .gesture(let m): try c.encode("gesture", forKey: .kind); payload = m
+        case .accessibility(let m): try c.encode("accessibility", forKey: .kind); payload = m
+        case .display(let m): try c.encode("display", forKey: .kind); payload = m
+        case .visibility(let m): try c.encode("visibility", forKey: .kind); payload = m
+        case .time(let m): try c.encode("time", forKey: .kind); payload = m
         }
         try payload.encode(to: encoder)
     }
@@ -442,6 +533,10 @@ extension InspectorMarker: Codable {
         case .log(let m): return m.t
         case .note(let m): return m.t
         case .gesture(let m): return m.t
+        case .accessibility(let m): return m.t
+        case .display(let m): return m.t
+        case .visibility(let m): return m.t
+        case .time(let m): return m.t
         }
     }
 }

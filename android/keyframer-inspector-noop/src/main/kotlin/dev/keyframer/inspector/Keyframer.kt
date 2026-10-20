@@ -3,6 +3,7 @@ package dev.keyframer.inspector
 import android.animation.Animator
 import android.app.Activity
 import android.app.Application
+import android.view.View
 import dev.keyframer.inspector.core.Scenario
 import dev.keyframer.inspector.core.Signal
 
@@ -32,6 +33,9 @@ object Keyframer {
     fun <T : Animator> track(animator: T, name: String? = null): T = animator
 
     @JvmStatic
+    fun <T : Animator> track(animator: T, name: String?, view: View?): T = animator
+
+    @JvmStatic
     fun untrack(animator: Animator) {}
 
     @JvmStatic
@@ -40,6 +44,10 @@ object Keyframer {
     @JvmStatic
     @JvmOverloads
     fun signal(name: String, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? = null
+
+    @JvmStatic
+    @JvmOverloads
+    fun signal(name: String, view: View?, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? = null
 
     @JvmStatic
     @JvmOverloads
@@ -58,3 +66,5 @@ object Keyframer {
 }
 
 fun <T : Animator> T.kfTrack(name: String? = null): T = this
+
+fun <T : Animator> T.kfTrack(name: String?, view: View): T = this

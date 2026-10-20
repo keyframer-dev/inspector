@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (slowed recording): hold to delete at a quarter of the speed, with its 1x hold, wait and settle:
+# ci runs them on the app's clock, four times as long in real time (R6a; the hold is 5.6 s).
+# fill (app/hold.tsx:52) is 900 ms and gone (app/hold.tsx:53) 260 ms on the app's clock, as at 1x.
+name: qa slow steps hold
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/hold
+    - wait: { id: hold-delete }
+      timeout: 15s
+    - longpress: hold-delete
+      ms: 1400
+    - wait: 600ms
+record:
+  speed: 0.25
+  settle: 300ms
+expect:
+  - value: app/hold.tsx:52:15
+    duration: 860ms..930ms
+    settle: 790ms..835ms
+  - value: app/hold.tsx:53:15
+    duration: 250ms..285ms
+    settle: 220ms..250ms
+  - none: [reduce-motion, unseen, two-writers, jump, error]

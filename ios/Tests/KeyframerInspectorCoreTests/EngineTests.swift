@@ -189,3 +189,26 @@ final class AnimationInfoTests: XCTestCase {
         XCTAssertEqual(LayerClock(local0: 0, media0: 0, rate: 0.5).local(atMedia: 2), 1)
     }
 }
+
+/// N6: a 2π spin read through atan2 wraps at ±π; unwrapped, it reads its travel.
+final class AngleUnwrapperTests: XCTestCase {
+    func testASpinReadsItsTravel() {
+        var u = AngleUnwrapper()
+        let raw = [0, 1.5, 3.06, -3.0, -1.5, -0.0001]
+        let read = raw.map { u.unwrap("card/transform.rotation.z", $0) }
+        XCTAssertEqual(read[2], 3.06, accuracy: 1e-9)
+        XCTAssertEqual(read[3], 2 * .pi - 3.0, accuracy: 1e-9)
+        XCTAssertEqual(read[5], 2 * .pi - 0.0001, accuracy: 1e-9)
+        // Every step is the real one, never a jump of a turn.
+        for i in 1..<read.count { XCTAssertLessThan(abs(read[i] - read[i - 1]), .pi) }
+    }
+
+    func testBackwardsAndPerTrack() {
+        var u = AngleUnwrapper()
+        XCTAssertEqual([0, -2, -3.1, 3.0, 1].map { u.unwrap("a", $0) }.last!, 1 - 2 * .pi, accuracy: 1e-9)
+        XCTAssertEqual(u.unwrap("b", 3.0), 3.0, "another track starts on its own")
+        XCTAssertTrue(LayerKeyPath.isAngle("transform.rotation.z"))
+        XCTAssertTrue(LayerKeyPath.isAngle("sublayerTransform.rotation.z"))
+        XCTAssertFalse(LayerKeyPath.isAngle("transform.scale.x"))
+    }
+}

@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the carousel paged to 1, 2, 3, 4 and back to 0 (scrollTo, animated, 700 ms apart). A native
+# animated scroll does not overshoot and ends before the next page starts. The dots animate their
+# width (a layout property): that hint is expected.
+name: qa carousel pages
+flow:
+  scenario: "carousel: page through and back"
+record:
+  settle: 900ms
+expect:
+  - value: scrollX
+    overshoot: < 1%
+    duration: < 700ms
+  - frames: { dropped: < 12 }
+  - none: [reduce-motion, unseen, two-writers, jump, error]

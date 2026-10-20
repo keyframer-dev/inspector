@@ -1,0 +1,10 @@
+# QA regression check, bug 2 (curve metrics fold the finger drag into the spring-back motion).
+# The release spring is SpringSimulation(mass 1, stiffness 180, damping 14): ζ ≈ 0.52, ≈ 14.6% overshoot.
+# Measured by value today: one motion (drag + spring back), travel ~0, overshoot 0% -> this check FAILS
+# until motion segments split where the animateWith starts. Compare qa-motion-drag-site.yml (passes).
+name: qa motion drag value
+flow: { scenario: drag card }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: drag
+    overshoot: 10%..20%

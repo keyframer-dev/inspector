@@ -39,8 +39,20 @@ export const goldens = {
       "overrides",
       "replay",
       "scenarios",
-      "capture"
-    ]
+      "capture",
+      "time",
+      "widget-sites"
+    ],
+    "display": {
+      "hz": 120,
+      "adaptive": true
+    },
+    "accessibility": {
+      "reduceMotion": false
+    },
+    "device": {
+      "model": "Mac15,3"
+    }
   },
   catalog: {
     "type": "events",
@@ -198,6 +210,60 @@ export const goldens = {
       }
     ]
   },
+  time: {
+    "type": "time",
+    "scale": 0.25
+  },
+  markers: {
+    "type": "samples",
+    "samples": [],
+    "markers": [
+      {
+        "kind": "time",
+        "t": 366,
+        "scale": 0.25
+      },
+      {
+        "kind": "display",
+        "t": 376,
+        "hz": 60
+      },
+      {
+        "kind": "accessibility",
+        "t": 376,
+        "reduceMotion": true
+      },
+      {
+        "kind": "appState",
+        "t": 376,
+        "state": "background"
+      },
+      {
+        "kind": "visibility",
+        "t": 376,
+        "id": "lib/main.dart:31:5",
+        "visible": false,
+        "reason": "covered"
+      },
+      {
+        "kind": "visibility",
+        "t": 376,
+        "id": "lib/main.dart:31:5",
+        "visible": true
+      }
+    ]
+  },
+  renderHint: {
+    "type": "events",
+    "events": [
+      {
+        "kind": "renderHint",
+        "id": "lib/main.dart:31:5",
+        "hint": "opacity-widget",
+        "detail": "Opacity at lib/main.dart:120 is rebuilt with a new opacity (0.40, then 0.57)"
+      }
+    ]
+  },
   scenarioDone: {
     "type": "scenarioDone",
     "name": "drag card",
@@ -227,7 +293,8 @@ export const goldens = {
     "events": [
       {
         "kind": "unsignal",
-        "id": "lib/main.dart:31:5"
+        "id": "lib/main.dart:31:5",
+        "t": 386
       }
     ]
   },

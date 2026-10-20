@@ -1,0 +1,37 @@
+{
+  "name": "@keyframerdev/vitals",
+  "version": "0.1.6",
+  "description": "Motion Vitals for React Native: slow frames and janky animations from production, by screen and call site",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "react-native": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./babel": {
+      "require": "./dist/babel.cjs",
+      "default": "./src/babel.ts"
+    },
+    "./runtime": {
+      "react-native": "./src/runtime.ts",
+      "default": "./src/runtime.ts"
+    }
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@babel/core": "^7.20.0",
+    "react": "*",
+    "react-native": "*",
+    "react-native-worklets": ">=0.5.0"
+  },
+  "peerDependenciesMeta": {
+    "@babel/core": {
+      "optional": true
+    },
+    "react-native-worklets": {
+      "optional": true
+    }
+  }
+}

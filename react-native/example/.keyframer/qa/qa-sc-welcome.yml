@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the welcome entrance, run by its registered scenario, each value held to what its code implies.
+# Reanimated 4 springs default to stiffness 900, damping 120 and mass 4, and a config only replaces
+# what it names. So withSpring(1, { damping: 20, stiffness: 180 }) runs with mass 4 (zeta 0.37):
+# about 28% overshoot, within 2% after about 1.56 s. badge's withSpring(1.33, { damping: 11 })
+# (zeta 0.09) goes about 7.5% past 1.33 (of its 0 to 1.33 travel) and settles about 1.8 s after its
+# 400 ms delay. withTiming(0, { duration: 420 }) is within 2% at 90% of its time (inOut quad): 378 ms.
+# The replay remounts the screen once the first entrance has run to its end (components/scenarios.ts).
+name: qa welcome entrance
+flow:
+  scenario: "welcome: replay the entrance"
+record:
+  settle: 2000ms
+expect:
+  - value: logoScale
+    overshoot: 25%..32%
+    settle: 1.4s..1.8s
+  - value: cardY
+    duration: 400ms..440ms
+    settle: 360ms..400ms
+    overshoot: < 1%
+  - value: cardOpacity
+    duration: 285ms..320ms
+    settle: 255ms..290ms
+  - value: badge
+    overshoot: 6%..9%
+    settle: 1.6s..2s
+  - frames: { dropped: < 20, longest: < 150ms }
+  - none: [reduce-motion, unseen, two-writers, jump, error]

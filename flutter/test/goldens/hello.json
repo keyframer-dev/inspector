@@ -34,6 +34,18 @@
     "overrides",
     "replay",
     "scenarios",
-    "capture"
-  ]
+    "capture",
+    "time",
+    "widget-sites"
+  ],
+  "display": {
+    "hz": 120,
+    "adaptive": true
+  },
+  "accessibility": {
+    "reduceMotion": false
+  },
+  "device": {
+    "model": "Mac15,3"
+  }
 }

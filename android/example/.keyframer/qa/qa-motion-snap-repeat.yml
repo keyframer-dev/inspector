@@ -1,0 +1,12 @@
+# QA regression check, bug 2 (an instant jump to the animation's start value is folded into the
+# motion). The release snap is ObjectAnimator 450 ms OvershootInterpolator(1.6): 9.0% overshoot. The
+# first run reads 9.0%; every later run starts from the previous snap's stale 0, jumps to the release
+# point and reads 0% overshoot with a ~25,000/s peak velocity, so the median of 3 runs FAILS until fixed.
+# Needs the main screen on top (example: "drag card" fails elsewhere).
+name: qa motion snap repeat
+flow: { scenario: drag card }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: snap.translationY
+    duration: 400ms..500ms
+    overshoot: 7%..11%

@@ -1,0 +1,15 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (slowed recording): qa glitch animation then block at a quarter of the speed. pulse's
+# withTiming(1.25, { duration: 400 }) must still measure 400 ms (within 2% at 360 ms) on the app's clock.
+name: qa slow glitch animation then block
+flow:
+  scenario: "glitch lab: start an animation, then block JS"
+record:
+  speed: 0.25
+  settle: 625ms  # on the app's clock: 2.5 s real (R6a)
+expect:
+  - value: pulse
+    duration: 385ms..425ms
+    settle: 345ms..380ms
+    overshoot: < 1%
+  - none: [reduce-motion, two-writers, jump, error]

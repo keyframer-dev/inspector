@@ -7,9 +7,11 @@
  *   bun Tools/editor.ts touches  [--seconds 15]     record while someone (or a UI test) touches the app
  *   bun Tools/editor.ts watch                       print what the app sends
  *
- * `smoke` needs the example app (its scenarios: bounce, spin, fade, jank, push, back). It records, runs
- * scenarios, scrubs with `playback`, captures frames, scrubs Core Animation with `scrub`, applies an
- * override, and writes what it saw (session.json, frame-*.jpg) to --out. Exit code 1 on any failure.
+ * `smoke` needs the example app (its scenarios: bounce, spin, fade, jank, push, back, slide, swiftui). It
+ * records, runs scenarios, scrubs with `playback`, captures frames, scrubs Core Animation with `scrub`,
+ * applies an override, then slows, pauses and steps time (`time`), checks render hints, visibility
+ * markers and the SwiftUI traces, and writes what it saw (session.json, frame-*.jpg) to --out. Exit
+ * code 1 on any failure.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import type {
@@ -19,6 +21,7 @@ import type {
   InspectorFrameDrop,
   InspectorFrameStat,
   InspectorMarker,
+  InspectorRenderHint,
   InspectorSample,
   InspectorSignalSite,
 } from '../../protocol/inspector'
@@ -61,12 +64,19 @@ function checkEvent(e: InspectorEvent) {
   } else if (e.kind === 'signal') {
     const s = e.site
     expect(isStr(s.id) && isStr(s.file) && isNum(s.line) && 'component' in s && isStrOrNull(s.component) && 'name' in s && isStrOrNull(s.name), `signal ${s.id}`)
+  } else if (e.kind === 'renderHint') {
+    expect(isStr(e.id) && ['shadow-path', 'mask', 'blur', 'group-opacity', 'rasterize'].includes(e.hint) && (e.detail === undefined || isStr(e.detail)), `renderHint ${e.id} ${e.hint}`)
   } else expect(e.kind === 'style', `event kind ${(e as { kind: string }).kind}`)
 }
 function checkMarker(m: InspectorMarker) {
   expect(isNum(m.t), `marker ${m.kind}: t`)
   if (m.kind === 'touch') expect(['start', 'move', 'end', 'cancel'].includes(m.phase) && isNum(m.id) && isNum(m.x) && isNum(m.y), `touch marker`)
   else if (m.kind === 'navigation') expect(isStr(m.route), 'navigation marker')
+  else if (m.kind === 'accessibility') expect(typeof m.reduceMotion === 'boolean', 'accessibility marker')
+  else if (m.kind === 'display') expect(isNum(m.hz) && m.hz > 0, 'display marker')
+  else if (m.kind === 'visibility')
+    expect(isStr(m.id) && typeof m.visible === 'boolean' && (m.reason === undefined || ['offscreen', 'hidden', 'detached', 'covered'].includes(m.reason)), `visibility marker ${m.id}`)
+  else if (m.kind === 'time') expect(isNum(m.scale) && m.scale >= 0 && (m.step === undefined || (m.scale === 0 && m.step >= 1)), 'time marker')
   else expect(['appState', 'keyboard', 'log', 'note', 'gesture'].includes(m.kind), `marker kind ${m.kind}`)
 }
 function checkApp(m: InspectorAppMessage) {
@@ -74,9 +84,16 @@ function checkApp(m: InspectorAppMessage) {
     case 'hello':
       expect(m.role === 'app' && isStr(m.app) && m.platform === 'ios', 'hello: role/app/platform')
       expect(!m.screen || (isNum(m.screen.width) && isNum(m.screen.height) && isNum(m.screen.scale)), 'hello: screen')
-      expect(m.protocol === 1 && m.framework === 'uikit' && isStr(m.osVersion) && m.sdk?.name === 'KeyframerInspector', 'hello: protocol/framework/osVersion/sdk')
+      expect(m.protocol === 1 && (m.framework === 'uikit' || m.framework === 'swiftui') && isStr(m.osVersion) && m.sdk?.name === 'KeyframerInspector', 'hello: protocol/framework/osVersion/sdk')
       expect(m.threads?.js?.label === 'Main' && m.threads.js.animates === true && !m.threads.ui, 'hello: threads')
-      expect(!!m.capabilities?.includes('scrub') && !!m.capabilities.includes('playback'), 'hello: capabilities')
+      expect(!!m.capabilities?.includes('scrub') && !!m.capabilities.includes('playback') && !!m.capabilities.includes('time'), 'hello: capabilities')
+      expect(!m.display || (isNum(m.display.hz) && (m.display.adaptive === undefined || m.display.adaptive === true)), 'hello: display')
+      expect(typeof m.accessibility?.reduceMotion === 'boolean', 'hello: accessibility')
+      // A physical device says its model only, never its name or an id.
+      expect(!!m.device && (m.device.simulator === true || (m.device.name === undefined && m.device.id === undefined)), 'hello: device')
+      break
+    case 'time':
+      expect(isNum(m.scale) && m.scale >= 0, 'time: scale')
       break
     case 'events':
       m.events.forEach(checkEvent)
@@ -114,11 +131,13 @@ const session = {
   markers: [] as InspectorMarker[],
   counts: {} as Record<string, number>,
   unsignals: [] as string[],
+  hellos: [] as Extract<InspectorAppMessage, { type: 'hello' }>[],
+  hints: [] as InspectorRenderHint[],
 }
 const waiters: Array<{ test: (m: InspectorAppMessage) => boolean; resolve: (m: InspectorAppMessage) => void }> = []
 
 const ws = new WebSocket(url)
-const send = (m: InspectorEditorMessage | { type: 'scrub'; t: number | null }) => ws.send(JSON.stringify(m))
+const send = (m: InspectorEditorMessage) => ws.send(JSON.stringify(m))
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 function next<T extends InspectorAppMessage['type']>(type: T, test: (m: Extract<InspectorAppMessage, { type: T }>) => boolean = () => true, ms = 15_000) {
   return new Promise<Extract<InspectorAppMessage, { type: T }>>((resolve, reject) => {
@@ -134,15 +153,23 @@ function next<T extends InspectorAppMessage['type']>(type: T, test: (m: Extract<
 }
 
 ws.onmessage = (ev) => {
-  const m = JSON.parse(String(ev.data)) as InspectorAppMessage
+  if (String(ev.data) === 'pong') return
+  const parsed = JSON.parse(String(ev.data)) as { type?: string }
+  // The relay's own messages (who is connected, how many editors): not the app's.
+  if (parsed.type === 'apps' || parsed.type === 'presence') return
+  const m = parsed as InspectorAppMessage
   session.counts[m.type] = (session.counts[m.type] ?? 0) + 1
   checkApp(m)
-  if (m.type === 'hello') session.hello = m
+  if (m.type === 'hello') {
+    session.hello = m
+    session.hellos.push(m)
+  }
   if (m.type === 'events') {
     for (const e of m.events) {
       if (e.kind === 'signal') session.signals.set(e.site.id, e.site)
       if (e.kind === 'anim') session.anims.push(e)
       if (e.kind === 'unsignal') session.unsignals.push(e.id)
+      if (e.kind === 'renderHint') session.hints.push(e)
     }
   }
   if (m.type === 'samples') {
@@ -204,8 +231,15 @@ async function smoke() {
   const bounce = recorded.find((a) => a.site.target === 'card' && a.site.prop === 'position')
   check(
     'UIView.animate spring is attributed to the card and its code',
-    !!bounce && bounce.site.fn === 'UIView.animate' && bounce.site.component === 'CardsViewController' && bounce.site.file === 'closure #1 in CardsViewController.bounce()',
-    bounce && `${bounce.site.fn}, ${bounce.site.component}, ${bounce.site.file}`,
+    // The id is the function (stable across builds, N5); file and line are its declaration, read from
+    // the sources the simulator can see (N33).
+    !!bounce &&
+      bounce.site.fn === 'UIView.animate' &&
+      bounce.site.component === 'CardsViewController' &&
+      bounce.site.id === 'closure #1 in CardsViewController.bounce()/position' &&
+      /CardsViewController\.swift$/.test(bounce.site.file) &&
+      bounce.site.line > 0,
+    bounce && `${bounce.site.id}, ${bounce.site.fn}, ${bounce.site.component}, ${bounce.site.file}:${bounce.site.line}`,
   )
   check('UIKit bookkeeping animations are left out', !recorded.some((a) => a.site.prop === 'uiFractionalProgress'))
   const spin = recorded.find((a) => a.site.prop === 'transform.rotation.z')
@@ -255,11 +289,158 @@ async function smoke() {
     send({ type: 'overrides', overrides: {} })
   }
 
+  await motionSettings(cardY)
+
   // A full playback in time order.
   send({ type: 'playback', samples: session.samples.filter((s) => s.id === cardY) })
   await sleep(600)
   send({ type: 'replay' })
   await sleep(300)
+}
+
+/** The values of one signal between two moments of the recording's clock. */
+const between = (id: string, from: number, to: number) => session.samples.filter((s) => s.id === id && s.t >= from && s.t <= to)
+/** How long a signal kept moving inside a window: first change to last change, in ms. */
+function movingFor(id: string, from: number, to: number): number {
+  const xs = between(id, from, to).sort((a, b) => a.t - b.t)
+  const moves = xs.filter((s, i) => i > 0 && Math.abs(s.v - xs[i - 1]!.v) > 0.01)
+  return moves.length ? moves[moves.length - 1]!.t - xs[xs.indexOf(moves[0]!) - 1]!.t : 0
+}
+const markerT = () => session.markers.reduce((t, m) => Math.max(t, m.t), 0)
+
+/** Slow motion, pause and step (`time`), render hints, visibility markers and the SwiftUI traces. */
+async function motionSettings(cardY: string) {
+  // Two recorders (N21): one stopping leaves the other's recording running.
+  send({ type: 'record', signalIds: ['*'], on: true, recorder: 'smoke-a' })
+  send({ type: 'record', signalIds: ['*'], on: true, recorder: 'smoke-b' })
+  await sleep(300)
+  send({ type: 'record', signalIds: ['*'], on: false, recorder: 'smoke-a' })
+  const stillFrom = session.frames.length
+  await sleep(800)
+  check('one recorder stopping leaves the other recording', session.frames.length > stillFrom, `${session.frames.length - stillFrom} frame windows after smoke-a stopped`)
+  send({ type: 'record', signalIds: ['*'], on: false, recorder: 'smoke-b' })
+  await sleep(500)
+  const afterBoth = session.frames.length
+  await sleep(600)
+  check('the last recorder stopping stops the recording', session.frames.length === afterBoth)
+
+  const hello = session.hellos[0]!
+  const device = hello.device
+  check(
+    'hello says which simulator it runs on',
+    device?.simulator === true ? /^[0-9A-F-]{36}$/.test(device.id ?? '') && !!device.name && /,/.test(device.model ?? '') : !!device?.model && !device?.name,
+    JSON.stringify(device),
+  )
+  check('hello says the display, Reduce Motion and the time capability', isNum(hello.display?.hz) && typeof hello.accessibility?.reduceMotion === 'boolean' && !!hello.capabilities?.includes('time'), JSON.stringify({ display: hello.display, accessibility: hello.accessibility }))
+
+  send({ type: 'record', signalIds: ['*'], on: true })
+  await sleep(300)
+
+  // A quarter of the speed: the same spring takes four times as long on the recording's clock.
+  send({ type: 'time', scale: 0.25 })
+  const slowed = await next('time')
+  check('time 0.25 is answered with the speed', slowed.scale === 0.25)
+  const slowFrom = markerT()
+  send({ type: 'scenario', name: 'bounce' })
+  await next('scenarioDone', (m) => m.name === 'bounce')
+  await sleep(3000)
+  const slowMs = movingFor(cardY, slowFrom, slowFrom + 10_000)
+  check('a bounce at 0.25x runs about four times longer', slowMs > 1800, `${slowMs} ms of motion (about 600 at 1x)`)
+
+  // Paused: an animation started now does not move; steps move it a frame at a time.
+  send({ type: 'time', scale: 0 })
+  check('time 0 is answered: paused', (await next('time')).scale === 0)
+  await sleep(200)
+  const pausedAt = markerT()
+  send({ type: 'scenario', name: 'bounce' })
+  await next('scenarioDone', (m) => m.name === 'bounce')
+  await sleep(300)
+  const still = between(cardY, pausedAt, pausedAt + 5000)
+  const spread = still.length ? Math.max(...still.map((s) => s.v)) - Math.min(...still.map((s) => s.v)) : 0
+  check('nothing moves while paused', spread < 0.5, `${still.length} samples, spread ${spread.toFixed(2)}`)
+  const before = between(cardY, 0, 1e9).at(-1)?.v
+  send({ type: 'time', scale: 0, step: 6 })
+  check('a step is answered, still paused', (await next('time')).scale === 0)
+  await sleep(300)
+  const after = between(cardY, 0, 1e9).at(-1)?.v
+  check('six steps move the paused spring a little', before !== undefined && after !== undefined && after !== before, `${before?.toFixed(1)} to ${after?.toFixed(1)}`)
+  const pausedFrame = await capture('frame-paused', [])
+  check('capture while paused', !!pausedFrame.data, pausedFrame.error)
+  send({ type: 'time', scale: 1 })
+  check('time 1 is answered', (await next('time')).scale === 1)
+  await sleep(1500)
+
+  // The pill slides out of the screen and pulses there, then comes back.
+  send({ type: 'scenario', name: 'slide' })
+  await next('scenarioDone', (m) => m.name === 'slide')
+  await sleep(600)
+
+  // SwiftUI: an explicit spring from its call site, an implicit easeInOut through the transaction.
+  send({ type: 'scenario', name: 'swiftui' })
+  const swiftUIDone = await next('scenarioDone', (m) => m.name === 'swiftui', 20_000)
+  check('scenario swiftui', !swiftUIDone.error, swiftUIDone.error)
+
+  // The editor's slow motion reaches the SwiftUI animations a trace sees (Animation.speed).
+  send({ type: 'time', scale: 0.25 })
+  await next('time')
+  const swiftSlowFrom = markerT()
+  send({ type: 'scenario', name: 'swiftui' })
+  await next('scenarioDone', (m) => m.name === 'swiftui', 20_000)
+  await sleep(3000)
+  const swiftSlowMs = movingFor('SwiftUICardsView.card', swiftSlowFrom, swiftSlowFrom + 20_000)
+  check('a SwiftUI spring at 0.25x runs about four times longer', swiftSlowMs > 2500, `${swiftSlowMs} ms of motion (about 1000 at 1x)`)
+  send({ type: 'time', scale: 1 })
+  await next('time')
+
+  // An override from the panel rebuilds the next SwiftUI animation from that call site.
+  const cardSite = session.anims.find((a) => a.site.fn === 'withAnimation' && a.site.target === 'card')?.site.id
+  if (cardSite) {
+    send({ type: 'overrides', overrides: { [cardSite]: { '1.response': 900, '1.dampingFraction': 0.8 } } })
+    await sleep(100)
+    const before = session.anims.length
+    send({ type: 'scenario', name: 'swiftui' })
+    await next('scenarioDone', (m) => m.name === 'swiftui', 20_000)
+    const edited = session.anims.slice(before).find((a) => a.site.id === cardSite)
+    const cfg = (edited?.args[1] ?? {}) as Record<string, unknown>
+    check('an override edits the next SwiftUI animation', cfg.response === 900 && cfg.dampingFraction === 0.8, edited && JSON.stringify(cfg))
+    send({ type: 'overrides', overrides: {} })
+    await sleep(1500)
+  }
+  send({ type: 'scenario', name: 'back' })
+  await next('scenarioDone', (m) => m.name === 'back')
+  await sleep(400)
+  send({ type: 'record', signalIds: ['*'], on: false })
+  await sleep(400)
+
+  const times = session.markers.flatMap((m) => (m.kind === 'time' && m.step === undefined ? [m.scale] : []))
+  check('time markers on the recording', times.join(',') === '0.25,0,1,0.25,1', times.join(','))
+  const steps = session.markers.flatMap((m) => (m.kind === 'time' && m.step !== undefined ? [`${m.scale}+${m.step}`] : []))
+  check('a step while paused is a marker of its own', steps.join(',') === '0+6', steps.join(','))
+  const hints = (id: string) => session.hints.filter((h) => h.id.startsWith(id)).map((h) => h.hint)
+  check('render hint: the card\'s shadow has no path', hints('CardsViewController.card/').includes('shadow-path'), session.hints.map((h) => `${h.id} ${h.hint}`).join('; '))
+  check('render hint: the card fades as a group', hints('CardsViewController.card/').includes('group-opacity'), session.hints.find((h) => h.hint === 'group-opacity')?.detail)
+  const pill = session.markers.filter((m) => m.kind === 'visibility' && m.id.startsWith('CardsViewController.pill/'))
+  const pillStates = pill.map((m) => (m.kind === 'visibility' ? `${m.visible ? 'visible' : m.reason}@${m.t}` : ''))
+  // It pulses out of sight for 1.1 s before it slides back.
+  const gone = pill.find((m) => m.kind === 'visibility' && !m.visible && m.reason === 'offscreen')
+  const back = gone && pill.find((m) => m.kind === 'visibility' && m.visible && m.t > gone.t)
+  check('visibility: the pill went offscreen while it pulsed, and came back', !!gone && !!back && back.t - gone.t > 800, pillStates.filter((_, i, a) => a.indexOf(_) === i).slice(0, 6).join(' '))
+
+  const swiftHello = session.hellos.at(-1)
+  check('the hello says swiftui once it is used', swiftHello?.framework === 'swiftui', session.hellos.map((h) => h.framework).join(' then '))
+  const explicit = session.anims.find((a) => a.site.fn === 'withAnimation' && a.site.target === 'card')
+  check(
+    'withKeyframerAnimation is reported from its exact line',
+    !!explicit && /SwiftUICardsView\.swift$/.test(explicit.site.file) && explicit.site.line > 0 && (explicit.args[1] as Record<string, unknown>)?.animation === 'spring',
+    explicit && `${explicit.site.file}:${explicit.site.line}:${explicit.site.column} ${JSON.stringify(explicit.args)}`,
+  )
+  const implicit = session.anims.find((a) => a.site.fn === 'Transaction' && a.site.target === 'dot')
+  check('an implicit .animation is reported through the transaction', !!implicit && (implicit.args[1] as Record<string, unknown>)?.easing === 'easeInOut', implicit && JSON.stringify(implicit.args))
+  const swiftCard = session.samples.filter((s) => s.id === 'SwiftUICardsView.card')
+  const lowest = Math.min(...swiftCard.map((s) => s.v))
+  check('the SwiftUI card is sampled every frame, overshoot included', swiftCard.length > 10 && lowest < -122, `${swiftCard.length} samples, lowest ${lowest.toFixed(1)}`)
+  const dotX = session.samples.filter((s) => s.id === 'SwiftUICardsView.dot/x')
+  check('a traced point is two signals', new Set(dotX.map((s) => s.v)).size > 5 && session.signals.has('SwiftUICardsView.dot/y'), `${dotX.length} samples of dot/x`)
 }
 
 async function touches(seconds: number) {

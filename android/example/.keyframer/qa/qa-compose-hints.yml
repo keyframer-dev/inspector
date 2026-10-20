@@ -1,0 +1,7 @@
+# QA Compose check: Compose render hints are not read yet (documented), so opening the Compose screen
+# and toggling its card must report no render-hint problem from Compose.
+name: qa compose hints
+flow: { scenario: open compose }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - none: [render-hint, two-writers, jump]

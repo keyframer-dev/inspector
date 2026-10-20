@@ -1,0 +1,9 @@
+# QA regression check, new bug (ci resets the app once per check, not before each run): "open detail"
+# never finishes its activity, so the warm-up and 3 runs stack 4 DetailActivity screens; each covered
+# one's star dot keeps looping ("dot keeps moving while covered", #2...). Expect none from this check's
+# own run. FAILS with the default --runs 3 --warmup 1 until ci resets between runs.
+name: qa ci reset detail
+flow: { scenario: open detail }
+record: { speed: 1, settle: 800ms }
+expect:
+  - none: [unseen]

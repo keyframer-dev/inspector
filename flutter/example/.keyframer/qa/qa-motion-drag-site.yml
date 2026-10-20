@@ -1,0 +1,9 @@
+# QA control for bug 2: the same spring measured by its call site (lib/main.dart:99, animateWith).
+# Expected ≈ 14.6% overshoot (measured 14.7%). Should PASS today and after the fix.
+name: qa motion drag site
+flow: { scenario: drag card }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - site: lib/main.dart:99
+    overshoot: 10%..20%
+  - none: [two-writers, jump]

@@ -11,6 +11,7 @@ import type {
   InspectorCallSite,
   InspectorEvent,
   InspectorGestureSite,
+  InspectorRenderHint,
   InspectorTask,
   InspectorOverrides,
   InspectorSignalSite,
@@ -27,6 +28,8 @@ export type InspectorHook = {
   /** A shared value that unmounted, by its (instance) id. */
   unsignal?(id: string): void
   style(site: InspectorStyleSite): void
+  /** Something about how an animated view is drawn that costs frames (see renderHints). */
+  hint?(hint: InspectorRenderHint): void
 }
 
 type HookGlobal = { __KF_INSPECTOR__?: InspectorHook; __KF_SEEN__?: Seen }
@@ -37,11 +40,22 @@ type HookGlobal = { __KF_INSPECTOR__?: InspectorHook; __KF_SEEN__?: Seen }
  * the first render) gets them all on install: components report themselves while rendering, and one
  * that never re-renders would otherwise never show up. One entry per call site, so it stays small.
  * On globalThis because Metro can load this module twice (the CommonJS and ESM builds).
+ * `hints` are the render hints found so far, by `id:hint`; `routes` the screen each shared value
+ * instance mounted on, when navigation is tracked.
  */
-type Seen = { signals: Map<string, { sv: unknown; site: InspectorSignalSite }>; styles: Map<string, InspectorStyleSite> }
+type Seen = {
+  signals: Map<string, { sv: unknown; site: InspectorSignalSite }>
+  styles: Map<string, InspectorStyleSite>
+  hints: Map<string, InspectorRenderHint>
+  routes: Map<string, string>
+}
 function seen(): Seen {
   const g = globalThis as HookGlobal
-  return (g.__KF_SEEN__ ??= { signals: new Map(), styles: new Map() })
+  const s = (g.__KF_SEEN__ ??= { signals: new Map(), styles: new Map(), hints: new Map(), routes: new Map() })
+  // A copy of an older runtime may have made it without these.
+  s.hints ??= new Map()
+  s.routes ??= new Map()
+  return s
 }
 
 /** Every shared value rendered so far, by call site id: what a recording on the device samples. */
@@ -377,9 +391,13 @@ function registerWhileMounted(sv: unknown, site: InspectorSignalSite) {
     const n = claimSlot(site.id)
     const instance = n === 0 ? site : { ...site, id: `${site.id}#${n + 1}`, name: site.name ? `${site.name} #${n + 1}` : null }
     seen().signals.set(instance.id, { sv, site: instance })
+    noteRoute(instance.id, sv)
     ;(globalThis as HookGlobal).__KF_INSPECTOR__?.signal(sv, instance)
     return () => {
-      if (seen().signals.get(instance.id)?.sv === sv) seen().signals.delete(instance.id)
+      if (seen().signals.get(instance.id)?.sv === sv) {
+        seen().signals.delete(instance.id)
+        seen().routes.delete(instance.id)
+      }
       slots.get(site.id)?.delete(n)
       ;(globalThis as HookGlobal).__KF_INSPECTOR__?.unsignal?.(instance.id)
     }
@@ -389,9 +407,148 @@ function registerWhileMounted(sv: unknown, site: InspectorSignalSite) {
 }
 
 export function __kfStyle<T>(style: T, site: InspectorStyleSite): T {
-  seen().styles.set(site.id, site)
+  const s = seen()
+  // Called on every render: the hints a style's links give are worked out once per call site.
+  if (!s.styles.has(site.id)) hintStyle(site)
+  s.styles.set(site.id, site)
   ;(globalThis as HookGlobal).__KF_INSPECTOR__?.style(site)
   return style
+}
+
+// ─── Screens ──────────────────────────────────────────────────────────────────────
+// The screen a shared value mounted on, so a recording can say when its screen is covered by another
+// one (a stack keeps the screens below mounted, and a loop there keeps running). A screen's components
+// mount in the commit that navigates to it, before the navigation container's own effect reports the
+// change, so the route is read once that commit's effects have run.
+
+function noteRoute(id: string, sv: unknown): void {
+  void Promise.resolve().then(() => {
+    const route = nav.current?.route
+    if (route && seen().signals.get(id)?.sv === sv) seen().routes.set(id, route)
+  })
+}
+
+/**
+ * The screen each mounted shared value appeared on, by instance id. Values that mounted before
+ * navigation was tracked (the first screen, the root layout's chrome) are not in it: there is no
+ * telling a screen from what is drawn over every screen.
+ */
+export function signalRoutes(): ReadonlyMap<string, string> {
+  return seen().routes
+}
+
+// ─── Render hints ─────────────────────────────────────────────────────────────────
+// What the Babel plugin's static view of animated styles says about drawing cost, worked out once per
+// call site: shadows and layout animated every frame, a filter blur animated, and (iOS) a shadow on a
+// moving view that React Native cannot give a shadow path. Reported to the inspector as `renderHint`
+// events, and kept for recordings started later.
+
+const SHADOW_PROPS = new Set(['shadowOpacity', 'shadowRadius', 'shadowOffset', 'shadowColor', 'elevation', 'boxShadow'])
+/** Style properties that lay the view out again when they change (the problems engine's list). */
+const LAYOUT_PROPS = new Set([
+  'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'top', 'left', 'right', 'bottom', 'margin', 'marginTop', 'marginBottom',
+  'marginLeft', 'marginRight', 'marginHorizontal', 'marginVertical', 'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
+  'paddingHorizontal', 'paddingVertical', 'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'borderWidth', 'gap',
+])
+
+/** The hints a set of animated style properties gives. `id`: the style or animation call site they belong to. */
+export function hintsForProps(id: string, props: Array<{ prop: string; by?: string | null }>): InspectorRenderHint[] {
+  const groups: Array<[string, (p: string) => boolean, string]> = [
+    ['animated-shadow', (p) => SHADOW_PROPS.has(p), 'the shadow is drawn again every frame'],
+    ['animated-layout', (p) => LAYOUT_PROPS.has(p), 'the view is laid out again every frame'],
+    ['animated-blur', (p) => p === 'blur', 'the blur is applied again every frame'],
+  ]
+  const out: InspectorRenderHint[] = []
+  for (const [hint, matches, what] of groups) {
+    const hit = props.filter((p) => matches(p.prop))
+    if (!hit.length) continue
+    const named = [...new Set(hit.map((p) => (p.by ? `${p.prop} (${p.by})` : p.prop)))]
+    out.push({ id, hint, detail: `${named.join(', ')} animated: ${what}` })
+  }
+  return out
+}
+
+function hintStyle(site: InspectorStyleSite): void {
+  for (const h of hintsForProps(site.id, site.links.map((l) => ({ prop: l.prop, by: l.signal })))) addHint(h)
+}
+
+const animSitesChecked = new Set<string>()
+
+/** An animation written straight into a style key (`{ width: withTiming(w) }`) says which key it animates. */
+export function hintAnimationSite(site: InspectorCallSite): void {
+  if (!site.prop || animSitesChecked.has(site.id)) return
+  animSitesChecked.add(site.id)
+  for (const h of hintsForProps(site.id, [{ prop: site.prop, by: site.target }])) addHint(h)
+}
+
+function addHint(h: InspectorRenderHint): void {
+  const key = `${h.id}:${h.hint}`
+  const s = seen()
+  if (s.hints.has(key)) return
+  s.hints.set(key, h)
+  ;(globalThis as HookGlobal).__KF_INSPECTOR__?.hint?.(h)
+}
+
+/** Every render hint found so far. */
+export function renderHints(): InspectorRenderHint[] {
+  return [...seen().hints.values()]
+}
+
+type OsGlobal = { __KF_OS__?: string }
+const viewsChecked = new Set<string>()
+
+/**
+ * The style of an element that takes an animated style, wrapped by the Babel plugin: returned as it
+ * is. While an inspector listens, its static part is read once per element: on iOS, React Native
+ * gives a shadow a path (drawn cheaply) only on a view with an opaque background; any other shadow is
+ * drawn from the view's pixels, offscreen, every frame the view moves.
+ */
+export function __kfViewStyle<S>(style: S, styleId: string): S {
+  if ((globalThis as HookGlobal).__KF_INSPECTOR__ === undefined || viewsChecked.has(styleId)) return style
+  viewsChecked.add(styleId)
+  try {
+    if ((globalThis as OsGlobal).__KF_OS__ === 'ios') checkShadowPath(flatten(style), styleId)
+  } catch {
+    // A style the inspector cannot read is still the app's to render.
+  }
+  return style
+}
+
+function checkShadowPath(s: Record<string, unknown>, styleId: string): void {
+  const links = seen().styles.get(styleId)?.links ?? []
+  const animated = (p: string) => links.some((l) => l.prop === p)
+  // The animated part decides the background: no telling whether it is opaque.
+  if (animated('backgroundColor')) return
+  const opacity = typeof s.shadowOpacity === 'number' ? s.shadowOpacity : 0
+  if (opacity <= 0 && !animated('shadowOpacity')) return
+  if (s.shadowColor !== undefined && colorAlpha(s.shadowColor) === 0) return
+  const alpha = s.backgroundColor === undefined || s.backgroundColor === null ? 0 : colorAlpha(s.backgroundColor)
+  if (alpha === null || alpha >= 0.999) return
+  const bg = s.backgroundColor == null ? 'no backgroundColor' : `backgroundColor ${String(s.backgroundColor)}`
+  addHint({ id: styleId, hint: 'shadow-path', detail: `shadowOpacity ${animated('shadowOpacity') ? 'animated' : opacity} on a view with ${bg}: no shadow path, so the shadow is rendered from the view's pixels` })
+}
+
+/** A color's alpha from 0 to 1, or null when it cannot be read here (a platform color, a dynamic one). */
+export function colorAlpha(c: unknown): number | null {
+  if (typeof c === 'number') return ((c >>> 24) & 255) / 255
+  if (typeof c !== 'string') return null
+  const v = c.trim().toLowerCase()
+  if (v === 'transparent') return 0
+  const hex = /^#([0-9a-f]{3,8})$/.exec(v)?.[1]
+  if (hex) {
+    if (hex.length === 4) return parseInt(hex[3]! + hex[3]!, 16) / 255
+    if (hex.length === 8) return parseInt(hex.slice(6), 16) / 255
+    return 1
+  }
+  const fn = /^(rgba?|hsla?)\((.*)\)$/.exec(v)
+  if (fn) {
+    const parts = fn[2]!.split(/[\s,/]+/).filter(Boolean)
+    if (parts.length < 4) return 1
+    const a = parts[3]!
+    return a.endsWith('%') ? Number(a.slice(0, -1)) / 100 : Number(a)
+  }
+  // A named color.
+  return 1
 }
 
 /**
@@ -491,6 +648,32 @@ export function tapNavigation(fn: (n: NavigationReport) => void): () => void {
 
 export function currentRoute(): NavigationReport | null {
   return nav.current
+}
+
+// ─── Animation speed ──────────────────────────────────────────────────────────────
+// The speed the inspector runs the app's animations at (the `time` message; native.ts applies it):
+// recordings mark each change, and Motion Scan shows it.
+
+type TimeShared = { __KF_TIME__?: { scale: number; listeners: Set<(scale: number) => void> } }
+const speed = ((globalThis as TimeShared).__KF_TIME__ ??= { scale: 1, listeners: new Set() })
+
+export function emitTimeScale(scale: number): void {
+  if (speed.scale === scale) return
+  speed.scale = scale
+  for (const fn of speed.listeners) fn(scale)
+}
+
+/** Calls `fn` with every new speed (1 normal, 0 paused). Returns the unsubscribe. */
+export function tapTimeScale(fn: (scale: number) => void): () => void {
+  speed.listeners.add(fn)
+  return () => {
+    speed.listeners.delete(fn)
+  }
+}
+
+/** The speed animations run at now: 1 unless an inspector slowed or paused them. */
+export function timeScale(): number {
+  return speed.scale
 }
 
 // What navigates the app back to a recorded screen (record.ts trackNavigation registers its container).
@@ -876,6 +1059,7 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
   const isRef = (v: unknown): v is object => (typeof v === 'object' && v !== null) || typeof v === 'function'
   const seenSignals = new WeakMap<object, string>()
   const seenStyles = new Set<string>()
+  const seenHints = new Set<string>()
   // Shared values by call site id, for recording and playing back gestures, sensors and scroll.
   const signals = new Map<string, { value: unknown }>()
   const hook: InspectorHook = {
@@ -884,9 +1068,16 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
       const eid = nextEid++
       const reported = next.map((a) => (isRef(a) && animIds.has(a) ? { $anim: animIds.get(a)! } : a))
       send({ kind: 'anim', eid, site, at: now(), args: reported, thread: 'js' })
+      if (site.prop) hintAnimationSite(site)
       const result = fn(...next)
       if (isRef(result)) animIds.set(result, eid)
       return result
+    },
+    hint(h) {
+      const key = `${h.id}:${h.hint}`
+      if (seenHints.has(key)) return
+      seenHints.add(key)
+      send({ kind: 'renderHint', ...h })
     },
     style(site) {
       if (seenStyles.has(site.id)) return
@@ -923,13 +1114,15 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
      */
     report(site: InspectorCallSite, args: unknown[]) {
       send({ kind: 'anim', eid: nextEid++, site, at: now(), args, thread: 'ui' })
+      if (site.prop) hintAnimationSite(site)
     },
     install() {
       ;(globalThis as HookGlobal).__KF_INSPECTOR__ = hook
       // What rendered before this inspector was installed.
-      const { signals: sv, styles } = seen()
+      const { signals: sv, styles, hints } = seen()
       for (const { sv: v, site } of sv.values()) hook.signal(v, site)
       for (const site of styles.values()) hook.style(site)
+      for (const h of hints.values()) hook.hint!(h)
       return () => {
         if ((globalThis as HookGlobal).__KF_INSPECTOR__ === hook) delete (globalThis as HookGlobal).__KF_INSPECTOR__
       }

@@ -46,12 +46,25 @@ object CallSites {
     /**
      * The component the call sits in: the outer class (`MainActivity` for `MainActivity$onCreate$1`), or
      * for a top-level function (a `CardKt` file class) the function itself, the way a composable is named.
+     * A lambda in a top-level function (`CardKt$PulsingCard$1.invoke`) is named after that function;
+     * one Compose hoisted out of every function (`ComposableSingletons$CardKt$lambda-1$1`) after its file.
      */
     fun component(frame: StackTraceElement): String? {
-        val outer = outerClass(frame.className).substringAfterLast('.')
-        if (outer.endsWith("Kt") && frame.methodName.isNotEmpty()) return cleanMethod(frame.methodName)
-        return outer.ifEmpty { null }
+        var outer = outerClass(frame.className).substringAfterLast('.')
+        var inner = frame.className.substringAfter('$', "").split('$')
+        if (outer == "ComposableSingletons" && inner.isNotEmpty() && inner[0].isNotEmpty()) {
+            outer = inner[0]
+            inner = inner.drop(1)
+        }
+        if (!outer.endsWith("Kt")) return outer.ifEmpty { null }
+        val method = cleanMethod(frame.methodName)
+        if (method.isNotEmpty() && method !in LAMBDA_METHODS) return method
+        inner.firstOrNull { it.isNotEmpty() && !it[0].isDigit() && !it.startsWith("lambda") }?.let { return it }
+        return outer.removeSuffix("Kt").ifEmpty { null }
     }
+
+    /** What a lambda's body is called on the JVM: no help naming the function it is written in. */
+    private val LAMBDA_METHODS = setOf("invoke", "invokeSuspend")
 
     fun site(frame: StackTraceElement): Located {
         val file = filePath(frame)

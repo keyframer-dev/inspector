@@ -122,4 +122,53 @@ void main() {
     await editor.ws.close();
     await relay.close();
   });
+
+  test('time: routed both ways, and a late editor is told the speed after the hello until a new hello', () async {
+    final relay = await KfRelay.start(port: 0);
+    final rt = KfRuntime();
+    final host = FakeFullHost();
+    final client = KfInspectorClient(
+      url: relayAppUrl(port: relay.port, app: 'Demo', platform: 'macos'),
+      platform: 'macos',
+      connector: (u) => IoKfSocket.connect(u),
+      app: 'Demo',
+      host: host,
+      runtime: rt,
+    )..start();
+    await Future<void>.delayed(const Duration(milliseconds: 200));
+    final first = await Editor.connect(relay.port);
+    await first.next((m) => m['type'] == 'hello');
+    first.send({'type': 'time', 'scale': 0.25});
+    expect(await first.next((m) => m['type'] == 'time'), {'type': 'time', 'scale': 0.25});
+    expect(host.scale, 0.25);
+
+    // A panel that attaches later learns the speed right after the app's hello.
+    final late = await Editor.connect(relay.port);
+    await late.next((m) => m['type'] == 'hello');
+    final helloAt = late.received.indexWhere((m) => m['type'] == 'hello');
+    expect(late.received[helloAt + 1], {'type': 'time', 'scale': 0.25});
+
+    await client.dispose();
+    await first.ws.close();
+    await late.ws.close();
+
+    // The relay's own memory, seen with a bare app: a new hello (a reloaded app is back at 1x) clears it.
+    final app = await WebSocket.connect('ws://127.0.0.1:${relay.port}/app?name=Bare&platform=macos');
+    app.add(jsonEncode({'type': 'hello', 'role': 'app', 'app': 'Bare', 'platform': 'macos'}));
+    app.add(jsonEncode({'type': 'time', 'scale': 0}));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final paused = await Editor.connect(relay.port);
+    expect((await paused.next((m) => m['type'] == 'time'))['scale'], 0);
+    app.add(jsonEncode({'type': 'hello', 'role': 'app', 'app': 'Bare', 'platform': 'macos'}));
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    final third = await Editor.connect(relay.port);
+    await third.next((m) => m['type'] == 'hello');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(third.received.where((m) => m['type'] == 'time'), isEmpty);
+    await app.close();
+    for (final e in [paused, third]) {
+      await e.ws.close();
+    }
+    await relay.close();
+  });
 }

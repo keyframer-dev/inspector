@@ -31,9 +31,11 @@ import { useFrameCallback, useSharedValue } from 'react-native-reanimated'
 import { scheduleOnRN } from 'react-native-worklets'
 import { setCaptureRoot } from './capture'
 import { MotionTracker, droppedFrames, frameIntervalOf } from './motionStats'
-import { uiThreadBridge } from './native'
+import { currentRefreshRate, noteDisplay, uiThreadBridge, watchDisplay } from './native'
+import { createDisplayMeter, frameBudget, tickDisplayMeter, type DisplayMeter } from './display'
 import { configureRecorder, isRecording, recordingElapsed, recordTouches, startRecording, stopRecording, watchRecording, watchSaved, type RecorderConfig } from './record'
-import { createInspector, getLayouts, isCapturing, isInspectorInstalled, tapInspector, watchCapturing, watchLayouts } from './runtime'
+import { realFrameTime } from './clock'
+import { createInspector, getLayouts, isCapturing, isInspectorInstalled, tapInspector, tapTimeScale, timeScale, watchCapturing, watchLayouts } from './runtime'
 
 export { isInstrumented } from './runtime'
 
@@ -130,6 +132,10 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   // Hidden while the inspector snapshots the screen for an export.
   const [hidden, setHidden] = useState(isCapturing)
   useEffect(() => watchCapturing(setHidden), [])
+  // The speed an inspector runs animations at: shown on the pill while it is not normal, so a paused
+  // app does not look frozen for no reason.
+  const [speed, setSpeed] = useState(timeScale)
+  useEffect(() => tapTimeScale(setSpeed), [])
 
   // ── Recorder ──
   const [rec, setRec] = useState(isRecording)
@@ -164,6 +170,10 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   const uiFast = useSharedValue(0)
   const uiMid = useSharedValue(0)
   const uiInterval = useSharedValue(1000 / 60)
+  // The display's refresh rate as far as it is known (a connection measures it, so does a recording):
+  // the UI thread runs at it, so its drops are counted against it. Its own frames say it too (below).
+  const knownHz = useSharedValue(currentRefreshRate())
+  useEffect(() => watchDisplay((hz) => knownHz.set(hz)), [knownHz])
   const onUiDrop = (uiTs: number, frames: number, dt: number) => {
     // UI timestamps run on their own clock: line them up with JS time by the smallest lag seen.
     const lag = Date.now() - uiTs
@@ -178,23 +188,36 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   }
   useFrameCallback((info) => {
     'worklet'
-    // The gap since the last callback, measured from timestamps so a skipped callback shows as one long frame.
+    // The gap since the last callback, measured from timestamps so a skipped callback shows as one long
+    // frame. Real time: frame callbacks get the inspector's slowed clock while it controls the speed.
+    const ts = realFrameTime(info.timestamp)
+    // The display, read from these frames: kept on the UI runtime (an object in a shared value or a
+    // closure cannot be changed in place). What it learns goes to the rest of the inspector too.
+    const g = globalThis as { __KF_SCAN_DISPLAY__?: DisplayMeter }
+    let d = g.__KF_SCAN_DISPLAY__
+    if (d === undefined) {
+      d = createDisplayMeter()
+      g.__KF_SCAN_DISPLAY__ = d
+    }
+    if (tickDisplayMeter(d, ts)) scheduleOnRN(noteDisplay, d.hz, d.changes)
     const last = uiLastTs.value
-    uiLastTs.value = info.timestamp
+    uiLastTs.value = ts
     if (last === 0) return
-    const dt = info.timestamp - last
+    const dt = ts - last
     if (dt <= 0) return
     if (dt < uiMinDt.value) uiMinDt.value = dt
     if (dt > uiMaxDt.value) uiMaxDt.value = dt
     if (dt < 10.5) uiFast.value += 1
     else if (dt < 13) uiMid.value += 1
-    const lost = Math.max(0, Math.round(dt / uiInterval.value) - 1)
-    if (lost > 0) scheduleOnRN(onUiDrop, info.timestamp, lost, dt)
+    // One refresh of the display once it is known; until then, the guess from the last window.
+    const interval = frameBudget(d, knownHz.value, uiInterval.value)
+    const lost = Math.max(0, Math.round(dt / interval) - 1)
+    if (lost > 0) scheduleOnRN(onUiDrop, ts, lost, dt)
     uiFrames.value += 1
-    if (uiWindowStart.value === 0) uiWindowStart.value = info.timestamp
-    const span = info.timestamp - uiWindowStart.value
+    if (uiWindowStart.value === 0) uiWindowStart.value = ts
+    const span = ts - uiWindowStart.value
     if (span >= 500) {
-      // The refresh interval is what most frames of the last window took, snapped to 60/90/120 Hz.
+      // Until the display's rate is known: what most frames of the last window took, snapped to 60/90/120 Hz.
       const m = uiMinDt.value
       const n = uiFrames.value
       uiInterval.value = uiFast.value * 2 > n ? 1000 / 120 : (uiFast.value + uiMid.value) * 2 > n ? 1000 / 90 : 1000 / 60
@@ -202,7 +225,7 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
       uiMid.value = 0
       scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value)
       uiFrames.value = 0
-      uiWindowStart.value = info.timestamp
+      uiWindowStart.value = ts
       uiMinDt.value = 1000
       uiMaxDt.value = 0
     }
@@ -231,7 +254,9 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
       frames++
       if (!windowStart) windowStart = ts
       if (ts - windowStart >= 500) {
-        interval = frameIntervalOf(recent)
+        // Its own rate, never faster than the display: React Native's JS thread often runs at 60 on a
+        // 120 Hz screen, and is judged at the rate it runs (frameIntervalOf takes the median).
+        interval = frameIntervalOf(recent, currentRefreshRate() || null)
         const fps = Math.round((frames * 1000) / (ts - windowStart))
         setRates((r) => (r.js === fps && r.dropped === totals.current.dropped ? r : { ...r, js: fps, dropped: totals.current.dropped }))
         frames = 0
@@ -322,6 +347,7 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
           h(Text, { style: [styles.pillText, { color: rates.js && rates.js < 50 ? COLORS.bad : COLORS.ok }] }, `JS ${rates.js || '–'}`),
           h(Text, { style: [styles.pillText, { color: rates.dropped ? COLORS.warn : '#a1a1aa' }] }, `${rates.dropped} dropped`),
           debug ? h(Text, { style: [styles.pillText, { color: '#a1a1aa' }] }, `${gaps.min}–${gaps.max}ms`) : null,
+          speed !== 1 ? h(Text, { style: [styles.pillText, { color: COLORS.warn }] }, speed === 0 ? 'Paused' : `${speed}×`) : null,
         )),
         open
           ? h(

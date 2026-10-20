@@ -1,0 +1,34 @@
+# compiler: R8
+# compiler_version: 8.5.35
+# min_api: 24
+# common_typos_disable
+# {"id":"com.android.tools.r8.mapping","version":"2.2"}
+# pg_map_id: 5b1ad2c
+# pg_map_hash: SHA-256 5b1ad2c0c7e1f0d7a3b6a61e4c1f0b9d7e3c2a1f0e9d8c7b6a5f4e3d2c1b0a99
+com.acme.shop.MainActivity -> com.acme.shop.MainActivity:
+# {"id":"sourceFile","fileName":"MainActivity.kt"}
+    android.os.Bundle savedState -> a
+    1:4:void onCreate(android.os.Bundle):22:25 -> onCreate
+    5:5:void setupFeed():40:40 -> onCreate
+    5:5:void onCreate(android.os.Bundle):26 -> onCreate
+com.acme.shop.feed.FeedCardKt -> a.b:
+# {"id":"sourceFile","fileName":"FeedCard.kt"}
+    1:1:void FeedCard(com.acme.shop.feed.Item,androidx.compose.runtime.Composer,int):31:31 -> a
+    2:9:void FeedCard(com.acme.shop.feed.Item,androidx.compose.runtime.Composer,int):34:41 -> a
+    10:10:float com.acme.shop.motion.SpringsKt.cardScale(boolean):12:12 -> a
+    10:10:void FeedCard(com.acme.shop.feed.Item,androidx.compose.runtime.Composer,int):44 -> a
+    1:3:void access$expand(com.acme.shop.feed.Item):0:0 -> b
+    void lambda$0() -> c
+com.acme.shop.feed.FeedViewModel -> a.c:
+# {"id":"sourceFile","fileName":"FeedViewModel.kt"}
+    kotlinx.coroutines.flow.MutableStateFlow items -> a
+    1:6:void <init>(com.acme.shop.data.Repository):18:23 -> <init>
+    1:2:void refresh() -> b
+    3:3:void refresh():51 -> b
+com.acme.shop.motion.SpringsKt -> a.d:
+# {"id":"sourceFile","fileName":"Springs.kt"}
+    1:5:androidx.compose.animation.core.SpringSpec cardSpring(float):8:12 -> a
+com.acme.shop.ui.ExpandableCard -> a.a:
+    1:1:void <init>(android.content.Context):14:14 -> <init>
+    1:7:void expand(boolean):60:66 -> a
+    8:8:void collapse():70 -> a

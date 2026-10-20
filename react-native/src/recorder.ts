@@ -16,6 +16,7 @@ import type {
   InspectorFrameDrop,
   InspectorFrameStat,
   InspectorMarker,
+  InspectorMount,
   InspectorRecordedAnim,
   InspectorRecording,
   InspectorRect,
@@ -27,7 +28,8 @@ import type {
 import { captureStack, sanitizeArgs, type CaptureScreen } from './client'
 import { watchCommits } from './commits'
 import { createFrameMeter, tickFrameMeter } from './frameMeter'
-import { createInspector, isInspectorInstalled, registeredSignals, registeredStyles, restingOffsets, tapInspector, tapScrollMounts } from './runtime'
+import { closeSamplerWindow, inSamplerWindow, samplerWindow, type SamplerWindow } from './samplerWindow'
+import { createInspector, isInspectorInstalled, registeredSignals, registeredStyles, renderHints, restingOffsets, tapInspector, tapScrollMounts } from './runtime'
 import { watchTasks } from './tasks'
 
 /** Measures the UI thread's frames until the returned function is called; `at` is the UI clock's time of the latest frame. */
@@ -95,6 +97,8 @@ export function startRecorder(opts: RecorderOptions): Recorder {
   const tasks: InspectorTask[] = []
   const work: InspectorUiWork[] = []
   const sampled = new Set<string>()
+  // When values mounted and went away while recording: a remount starts a new history under the same id.
+  const mounts: InspectorMount[] = []
   let stopped = false
 
   // Animations are reported through the inspector hook: install one when nothing else has.
@@ -103,6 +107,7 @@ export function startRecorder(opts: RecorderOptions): Recorder {
     : (opts.ensureInspector ?? (() => createInspector({ send: () => {} }).install()))()
 
   const untap = tapInspector((e) => {
+    if (e.kind === 'signal' || e.kind === 'unsignal') return valueMoved(e.kind === 'signal' ? e.site.id : e.id, e.kind === 'signal')
     if (e.kind !== 'anim' || anims.length >= MAX_ITEMS) return
     const thread = e.thread ?? 'js'
     // Taps run synchronously inside the instrumented call: the stack still holds the app code.
@@ -115,7 +120,25 @@ export function startRecorder(opts: RecorderOptions): Recorder {
   const isValue = (sv: unknown) => !!sv && typeof sv === 'object' && 'value' in (sv as object)
   let stopUiSampling: (() => void) | null = null
   let sampledValues: unknown[] = []
-  let sampleOffset = Infinity
+  // A sampler's rows count for the instances it started with (samplerWindow.ts): once an id mounts
+  // again or goes away, its rows for that id are the old instance's.
+  const movedAt = new Map<string, number>()
+  const samplers = new Set<SamplerWindow>()
+  let restartQueued = false
+  function valueMoved(id: string, mounted: boolean) {
+    const t = elapsed()
+    if (mounts.length < MAX_ITEMS) mounts.push({ id, t, mounted })
+    movedAt.set(id, t)
+    for (const w of samplers) if (w.ids.includes(id) && !w.until.has(id)) w.until.set(id, t)
+    // The new instance is sampled from the next tick, not the next poll.
+    if (mounted && opts.sampleUi && !restartQueued) {
+      restartQueued = true
+      setTimeout(() => {
+        restartQueued = false
+        if (!stopped) startUiSampling()
+      }, 0)
+    }
+  }
   const startUiSampling = () => {
     const entries = [...registeredSignals()].filter(([, x]) => isValue(x.sv))
     // Restart when a value mounted, or one was replaced (a screen re-mounted: same call site, new
@@ -124,23 +147,31 @@ export function startRecorder(opts: RecorderOptions): Recorder {
     sampledValues = entries.map(([, x]) => x.sv)
     stopUiSampling?.()
     const ids = entries.map(([id]) => id)
-    stopUiSampling = opts.sampleUi!(
+    const w = samplerWindow(ids, movedAt)
+    samplers.add(w)
+    let offset = Infinity
+    const stop = opts.sampleUi!(
       entries.map(([, x]) => x.sv),
       (rows) => {
         if (stopped || samples.length >= MAX_SAMPLES) return
         const t = elapsed()
-        for (const row of rows) sampleOffset = Math.min(sampleOffset, t - row[0]!)
+        for (const row of rows) offset = Math.min(offset, t - row[0]!)
         for (const row of rows) {
-          const at = Math.round(row[0]! + sampleOffset)
+          const at = Math.round(row[0]! + offset)
           for (let i = 0; i < ids.length; i++) {
             const v = row[i + 1]!
-            if (!Number.isFinite(v)) continue
+            if (!Number.isFinite(v) || !inSamplerWindow(w, i, at)) continue
             samples.push({ id: ids[i]!, t: at, v })
             sampled.add(ids[i]!)
           }
         }
       },
     )
+    stopUiSampling = () => {
+      stop()
+      closeSamplerWindow(w, elapsed())
+      samplers.delete(w)
+    }
   }
   const sampleTimer = opts.sampleUi
     ? setInterval(startUiSampling, 250)
@@ -269,6 +300,8 @@ export function startRecorder(opts: RecorderOptions): Recorder {
       const [, file, line] = /^scroll:(.*):(\d+):[xy]$/.exec(track) ?? []
       sites.push({ id: track, file: file ?? track, line: Number(line ?? 0), component: null, name: `scroll ${track.slice(-1)}` })
     }
+    // What the runtime saw about how animated views are drawn, like `styles`: every call site so far.
+    const hints = renderHints()
     return {
       format: 'keyframer-recording',
       version: 1,
@@ -288,6 +321,8 @@ export function startRecorder(opts: RecorderOptions): Recorder {
       tasks,
       work,
       styles: [...registeredStyles().values()],
+      ...(hints.length ? { hints } : {}),
+      ...(mounts.length ? { mounts } : {}),
       ...(note ? { note } : {}),
     }
   }

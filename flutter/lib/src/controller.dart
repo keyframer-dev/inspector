@@ -26,11 +26,18 @@ class KfAnimationController extends AnimationController {
     super.animationBehavior,
     required super.vsync,
     String? name,
-  }) {
-    _kf = _KfTracker(this, name ?? debugLabel, kfCaptureSites ? StackTrace.current : null);
+  }) : _vsync = vsync {
+    _kf = _KfTracker(this, name ?? debugLabel, kfCaptureSites ? StackTrace.current : null, owner: _vsync);
   }
 
   late final _KfTracker _kf;
+  final TickerProvider _vsync;
+
+  @override
+  void resync(TickerProvider vsync) {
+    super.resync(vsync);
+    _kf.signal.owner = vsync;
+  }
 
   @override
   TickerFuture forward({double? from}) => _kf.start(
@@ -190,6 +197,7 @@ extension KfTrackNotifier on ValueNotifier<double> {
   ValueNotifier<double> kfTrack(String name) {
     if (_trackedNotifiers[this] != null) return this;
     final s = KfSignal(
+      source: this,
       read: () => value,
       write: (v) => value = v,
       name: name,
@@ -215,9 +223,11 @@ int _unnamed = 0;
 KfStackFrame? _creationFrame(StackTrace? trace) => trace == null ? null : appFrame(parseStackTrace(trace.toString()));
 
 class _KfTracker {
-  _KfTracker(this.controller, this.name, StackTrace? created) {
+  _KfTracker(this.controller, this.name, StackTrace? created, {Object? owner}) {
     final frame = _creationFrame(created);
     signal = KfSignal(
+      source: controller,
+      owner: owner,
       read: () => controller.value,
       // A disposed controller (its screen closed) is left alone by a playback still running.
       write: (v) {
@@ -344,6 +354,7 @@ class _KfTracker {
 class _KfStatusTracker {
   _KfStatusTracker(this.controller, String? name, StackTrace? created) {
     signal = KfSignal(
+      source: controller,
       read: () => controller.value,
       write: (v) {
         if (!_disposed) controller.value = v;

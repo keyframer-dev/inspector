@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# The welcome screen's entrance, run by the scenario the app registers (components/scenarios.ts):
+# no other tool needed.
+name: welcome entrance
+flow:
+  scenario: "welcome: replay the entrance"
+record:
+  speed: 1
+  settle: 1500ms                 # the badge spring ends ~1.8 s in: keep recording past it
+expect:
+  - value: badge
+    overshoot: < 12%
+    settle: < 2.5s
+  # withSpring(1, { damping: 20, stiffness: 180 }) keeps Reanimated 4's mass 4: within 2% after about
+  # 1.56 s (1.59 s measured on an iPhone 17 Pro simulator, iOS 26.5).
+  - value: logoScale
+    settle: < 1.8s
+  # A debug build on a simulator drops about 8 frames here (median of 5 runs): mounting the screen
+  # and the replay remounting it; the limit leaves room for a slower machine.
+  - frames: { dropped: < 16 }
+  - none: [reduce-motion, two-writers, jump]

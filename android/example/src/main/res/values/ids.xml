@@ -5,4 +5,5 @@
     <item name="pulse" type="id" />
     <item name="card" type="id" />
     <item name="sheet" type="id" />
+    <item name="dot" type="id" />
 </resources>

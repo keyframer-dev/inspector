@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: a bad email typed and submitted from outside. The shake is withSequence(withTiming(-10, 50 ms),
+# withRepeat(withTiming(10, 90 ms), 4, true), withTiming(0, 50 ms)): 460 ms of durations, from 0 back
+# to 0. Each of its six legs ends on a frame and the next starts on the one after (3 + 6 x 4 + 3 frames
+# at 60 Hz), so it measures about 500 to 520 ms. A warning
+# goes to the log (expected). The field keeps the text; the next run replaces it.
+name: qa steps form
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/form
+    - wait: { text: "Create account" }
+      timeout: 15s
+    # The field by what it shows, its placeholder (R19): { text } matches a label, else a value, where
+    # an empty field's placeholder is.
+    - type: { into: { text: "Email" }, text: "not-an-email" }
+    - tap: { text: "Create account" }
+    - wait: 900ms
+record:
+  settle: 600ms
+expect:
+  - value: shake
+    duration: 480ms..540ms
+  - none: [reduce-motion, unseen, two-writers, jump, error]

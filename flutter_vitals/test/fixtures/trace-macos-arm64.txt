@@ -1,0 +1,15 @@
+*** *** *** *** *** *** *** *** *** *** *** *** *** *** *** ***
+pid: 32450, tid: 6097022976, name DartWorker
+os: macos arch: arm64 comp: no sim: no
+build_id: '2943649c15509c2b37ca8150ce6170a2'
+isolate_dso_base: 104f98000, vm_dso_base: 0
+isolate_instructions: 104f9c000, vm_instructions: 0
+    #00 abs 0000000104fd0c33 virt 0000000000038c33 _kDartSnapshotText+0x34c33
+    #01 abs 0000000104fd0bdb virt 0000000000038bdb _kDartSnapshotText+0x34bdb
+    #02 abs 0000000104fd0977 virt 0000000000038977 _kDartSnapshotText+0x34977
+    #03 abs 0000000104fd0c9f virt 0000000000038c9f _kDartSnapshotText+0x34c9f
+    #04 abs 0000000104fd9fbf virt 0000000000041fbf _kDartSnapshotText+0x3dfbf
+    #05 abs 0000000104fd10cf virt 00000000000390cf _kDartSnapshotText+0x350cf
+    #06 abs 0000000104fd998f virt 000000000004198f _kDartSnapshotText+0x3d98f
+    #07 abs 0000000104fd29d7 virt 000000000003a9d7 _kDartSnapshotText+0x369d7
+

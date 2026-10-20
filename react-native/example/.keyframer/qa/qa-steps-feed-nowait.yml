@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (probe): qa steps feed without its wait for a testID (a fixed 2 s instead), to see what
+# agent-device's snapshots cost the app's frames while recording.
+# The feed scrolled down twice and back up, from outside. Every row that mounts runs appear,
+# withDelay((index % 8) * 40, withTiming(1, { duration: 300 })) at app/feed.tsx:37: measured by its call
+# site, so every row counts (300 ms, within 2% at 270 ms). The header animates its height: expected.
+name: qa steps feed no wait
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/feed
+    - wait: 2s
+    - scroll: down
+    - wait: 500ms
+    - scroll: down
+    - wait: 500ms
+    - scroll: up
+    - wait: 500ms
+    - scroll: up
+    - wait: 500ms
+    - scroll: up
+    - wait: 700ms
+record:
+  settle: 600ms
+expect:
+  - site: app/feed.tsx:37
+    duration: 285ms..320ms
+    settle: 255ms..290ms
+    overshoot: < 1%
+  - none: [reduce-motion, two-writers, jump, error]

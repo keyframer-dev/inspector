@@ -1,0 +1,18 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the sheet's three snaps (half, full, closed), run by its registered scenario.
+# SPRING = { damping: 22, stiffness: 220, mass: 0.9 }: zeta 0.78, so about 1.9% overshoot, and it is
+# within 2% of each snap on its first approach, about 230 ms in. Its fastest is the close
+# (0.18 to 1.0 of an 874 pt screen): about 4800 pt/s.
+name: qa sheet snaps
+flow:
+  scenario: "sheet: open halfway, fully, then close"
+record:
+  settle: 900ms
+expect:
+  - value: sheetY
+    overshoot: < 3%
+    settle: 180ms..320ms
+    duration: < 800ms
+    velocity: 4000/s..5600/s
+  - frames: { dropped: < 12, longest: < 120ms }
+  - none: [reduce-motion, unseen, two-writers, jump, error]

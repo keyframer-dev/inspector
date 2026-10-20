@@ -44,6 +44,19 @@ class CallSitesTest {
     }
 
     @Test
+    fun `compose lambdas are named after their composable, or their file when Compose hoisted them`() {
+        // A content lambda inside a composable, and a suspend lambda in its LaunchedEffect.
+        assertEquals("PulsingCard", CallSites.component(f("dev.keyframer.example.ui.CardKt\$PulsingCard\$1", "invoke", "Card.kt", 20)))
+        assertEquals("PulsingCard", CallSites.component(f("dev.keyframer.example.ui.CardKt\$PulsingCard\$1\$1", "invokeSuspend", "Card.kt", 24)))
+        // Kotlin 2's lambdas compile to static methods on the file class.
+        assertEquals("PulsingCard", CallSites.component(f("dev.keyframer.example.ui.CardKt", "PulsingCard\$lambda\$3", "Card.kt", 30)))
+        // Compose moves lambdas that capture nothing into ComposableSingletons: the file is all there is.
+        val hoisted = f("dev.keyframer.example.ui.ComposableSingletons\$CardKt\$lambda-1\$1", "invoke", "Card.kt", 40)
+        assertEquals("Card", CallSites.component(hoisted))
+        assertEquals("dev/keyframer/example/ui/Card.kt:40:0", CallSites.site(hoisted).id)
+    }
+
+    @Test
     fun `no file name falls back to the class, a stack with no app frame gives null`() {
         assertEquals("com/acme/Thing.kt", CallSites.filePath(f("com.acme.Thing\$1", "run", null, 3)))
         assertNull(CallSites.firstAppFrame(arrayOf(f("android.os.Looper", "loop", "Looper.java", 1), f("dev.keyframer.inspector.X", "y", "X.kt", 2))))

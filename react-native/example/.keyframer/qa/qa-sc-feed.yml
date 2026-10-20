@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the feed scrolled down and back with slow rows (each row burns 8 ms of JS when it renders).
+# Each row's appear is withDelay((index % 8) * 40, withTiming(1, { duration: 300 })): 300 ms of motion,
+# within 2% at 270 ms. JS rendering problems and the header's animated height are expected here.
+name: qa feed scroll
+flow:
+  scenario: "feed: scroll with slow rows"
+record:
+  settle: 900ms
+expect:
+  - value: appear
+    duration: 285ms..320ms
+    settle: 255ms..290ms
+    overshoot: < 1%
+  - value: scrollY
+    overshoot: < 2%
+  - none: [reduce-motion, two-writers, jump, error]

@@ -1,0 +1,10 @@
+# QA regression check, new bug (ci resets the app once per check, before the warm-up, not before
+# each run): the push scenario leaves the detail screen on top, so the next run finds no Push button
+# ("No control with accessibility identifier push"). FAILS with the default --runs 3 --warmup 1
+# until ci resets (replay) before every run; passes with --runs 1 --warmup 0.
+name: qa ci reset push
+flow: { scenario: push }
+record: { speed: 1, settle: 1000ms }
+expect:
+  - value: dot.position.x
+    duration: 1100ms..1300ms

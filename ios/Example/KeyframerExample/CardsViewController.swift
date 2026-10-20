@@ -5,6 +5,7 @@ import UIKit
 final class CardsViewController: UIViewController {
     private let card = UIView()
     private let badge = CALayer()
+    private let pill = UILabel()
     private let chips = UIScrollView()
     private let buttons = UIStackView()
     private var lowered = false
@@ -21,7 +22,20 @@ final class CardsViewController: UIViewController {
         card.isAccessibilityElement = true
         card.accessibilityLabel = "Card"
         card.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(drag(_:))))
+        // A shadow without a shadowPath: the render hint "shadow-path" once it moves.
+        card.layer.shadowOpacity = 0.25
+        card.layer.shadowRadius = 12
+        card.layer.shadowOffset = CGSize(width: 0, height: 8)
         view.addSubview(card)
+
+        pill.text = "New"
+        pill.textAlignment = .center
+        pill.textColor = .white
+        pill.backgroundColor = .systemGreen
+        pill.layer.cornerRadius = 14
+        pill.clipsToBounds = true
+        pill.accessibilityIdentifier = "pill"
+        view.addSubview(pill)
 
         badge.name = "badge"
         badge.backgroundColor = UIColor.systemYellow.cgColor
@@ -44,9 +58,11 @@ final class CardsViewController: UIViewController {
 
         buttons.axis = .vertical
         buttons.spacing = 8
+        buttons.distribution = .fillEqually
         let row1 = UIStackView()
         let row2 = UIStackView()
-        for row in [row1, row2] {
+        let row3 = UIStackView()
+        for row in [row1, row2, row3] {
             row.distribution = .fillEqually
             row.spacing = 8
             buttons.addArrangedSubview(row)
@@ -56,6 +72,8 @@ final class CardsViewController: UIViewController {
         row1.addArrangedSubview(button("Fade", "fade", #selector(fade)))
         row2.addArrangedSubview(button("Jank", "jank", #selector(jank)))
         row2.addArrangedSubview(button("Push", "push", #selector(push)))
+        row3.addArrangedSubview(button("Slide", "slide", #selector(slide)))
+        row3.addArrangedSubview(button("SwiftUI", "swiftui", #selector(pushSwiftUI)))
         view.addSubview(buttons)
     }
 
@@ -68,8 +86,11 @@ final class CardsViewController: UIViewController {
             // Dragged by hand: recorded even when no animation runs.
             KeyframerInspector.track(card, as: "card")
         }
-        chips.frame = CGRect(x: 0, y: safe.maxY - 200, width: view.bounds.width, height: 48)
-        buttons.frame = CGRect(x: 16, y: safe.maxY - 136, width: view.bounds.width - 32, height: 112)
+        if pill.bounds.width == 0 {
+            pill.frame = CGRect(x: view.bounds.width - 96, y: safe.minY + 230, width: 72, height: 28)
+        }
+        chips.frame = CGRect(x: 0, y: safe.maxY - 256, width: view.bounds.width, height: 48)
+        buttons.frame = CGRect(x: 16, y: safe.maxY - 192, width: view.bounds.width - 32, height: 168)
     }
 
     private func button(_ title: String, _ id: String, _ action: Selector) -> UIButton {
@@ -119,6 +140,30 @@ final class CardsViewController: UIViewController {
 
     @objc func push() {
         navigationController?.pushViewController(DetailViewController(), animated: true)
+    }
+
+    @objc func pushSwiftUI() {
+        navigationController?.pushViewController(SwiftUICardsController(), animated: true)
+    }
+
+    /// The pill slides out of the screen and keeps pulsing there (frames nobody sees: `visibility`
+    /// markers), then comes back.
+    @objc func slide() {
+        let home = pill.center
+        UIView.animate(withDuration: 0.35, delay: 0, options: .curveEaseIn) {
+            self.pill.center.x = self.view.bounds.width + 120
+        } completion: { _ in
+            let pulse = CABasicAnimation(keyPath: "transform.scale")
+            pulse.fromValue = 1
+            pulse.toValue = 1.3
+            pulse.duration = 0.25
+            pulse.autoreverses = true
+            pulse.repeatCount = 2
+            self.pill.layer.add(pulse, forKey: "pulse")
+            UIView.animate(withDuration: 0.35, delay: 1.1, options: .curveEaseOut) {
+                self.pill.center = home
+            }
+        }
     }
 
     @objc private func drag(_ pan: UIPanGestureRecognizer) {

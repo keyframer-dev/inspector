@@ -1,0 +1,5 @@
+steps:
+  - launch: dev.keyframer.inspector.example
+  - await: { visible: { id: bounce } }
+  - tap: { id: bounce }
+  - wait: 1200

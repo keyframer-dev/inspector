@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: the two-writers button tapped from outside: withTiming(160) on x (app/checks.tsx:90) and, through
+# the reaction to kick, withSpring(0, { damping: 6 }) (app/checks.tsx:76). two-writers is expected.
+name: qa steps checks tug
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/checks
+    - wait: { id: checks-tug }
+      timeout: 15s
+    - tap: checks-tug
+    - wait: 1500ms
+expect:
+  - none: [reduce-motion, unseen, error]

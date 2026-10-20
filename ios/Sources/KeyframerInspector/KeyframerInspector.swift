@@ -77,8 +77,12 @@ public enum KeyframerInspector {
 
     /// Connects to the relay and starts watching animations. Does nothing in release builds unless
     /// `allowInRelease` is set, or when `KEYFRAMER_INSPECTOR=0` is in the environment.
+    ///
+    /// `filePath` (the caller's, filled in by the compiler): without a `sourceRoot`, the folder of the
+    /// file that calls `start` is where the app's Swift sources are read from (in the simulator), so
+    /// animations found on the stack get the file and line of their function.
     @MainActor @discardableResult
-    public static func start(_ configuration: Configuration = Configuration()) -> Bool {
+    public static func start(_ configuration: Configuration = Configuration(), filePath: StaticString = #filePath) -> Bool {
         let env = ProcessInfo.processInfo.environment["KEYFRAMER_INSPECTOR"]
         if env == "0" { return false }
         #if !DEBUG
@@ -86,7 +90,7 @@ public enum KeyframerInspector {
         #endif
         Inspector.shared?.stop()
         Swizzles.installOnce()
-        let inspector = Inspector(config: configuration)
+        let inspector = Inspector(config: configuration, callerFile: "\(filePath)")
         Inspector.shared = inspector
         inspector.start()
         return true

@@ -64,6 +64,49 @@ abstract interface class KfHost {
   Future<String> capture({double? width});
 }
 
+/// The display, the person's motion settings and the app's lifecycle. Optional, so a [KfHost] written
+/// before them keeps working: a host that also implements it puts `display` and `accessibility` in the
+/// hello, and their changes while recording become markers.
+abstract interface class KfDeviceHost {
+  KfDisplay? get display;
+  KfAccessibility? get accessibility;
+
+  /// `active`, `inactive` or `background`, as React Native's AppState names them.
+  String? get appState;
+
+  /// Calls `onChange` when any of them may have changed, until the returned function is called.
+  void Function() watchDevice(void Function() onChange);
+}
+
+/// The app's animation clock, for the `time` message. Optional: a [KfHost] that also implements it has
+/// the `time` capability.
+abstract interface class KfTimeHost {
+  /// Runs every animation at `scale` (1 normal, 0.25 a quarter of the speed, 0 paused) and returns the
+  /// speed now in effect.
+  double setTimeScale(double scale);
+
+  /// While paused: advances `frames` frames at the display's rate, then holds again.
+  void stepFrames(int frames);
+}
+
+/// What the widget tree shows while recording. Optional: a [KfHost] that also implements it reports
+/// values whose widgets left the screen (`visibility` markers) and how animated widgets are drawn
+/// (`renderHint` events), and registers what the SDK cannot instrument (implicit animations) as values
+/// of `runtime`.
+abstract interface class KfSceneHost {
+  /// Whether widgets carry their creation location in this build (`--track-widget-creation`, on in
+  /// `flutter run` and `flutter test`, off in `flutter build ios --debug`): implicit animations, Hero
+  /// sites and render-hint locations need it. The hello says so with the `widget-sites` capability.
+  bool get widgetSites;
+
+  /// Watches until the returned function is called.
+  void Function() watchScene(
+    KfRuntime runtime, {
+    required void Function(String id, bool visible, String? reason) onVisibility,
+    required void Function(KfRenderHint hint) onHint,
+  });
+}
+
 const _maxQueued = 2000;
 const _maxBackoff = Duration(seconds: 10);
 
@@ -75,6 +118,7 @@ class KfInspectorClient implements KfSink {
     this.platform = 'unknown',
     this.osVersion,
     this.host,
+    this.device,
     KfRuntime? runtime,
     this.batch = const Duration(milliseconds: 100),
     this.sampleInterval = const Duration(milliseconds: 16),
@@ -93,6 +137,12 @@ class KfInspectorClient implements KfSink {
   final String platform;
   final String? osVersion;
   final KfHost? host;
+
+  /// Which device it runs on (`hello.device`), when the platform can tell. Reading it can take a moment
+  /// (Android asks getprop), so the first hello waits for it, at most 2 s.
+  final Future<KfDevice?>? device;
+  KfDevice? _deviceInfo;
+  bool _deviceRead = false;
   final KfRuntime runtime;
   final Duration batch;
   final Duration sampleInterval;
@@ -122,6 +172,13 @@ class KfInspectorClient implements KfSink {
   double _recordStart = 0;
   int _nextEid = 1;
 
+  // The animation speed an editor asked for, and what the device last said about itself.
+  double _timeScale = 1;
+  KfDisplay? _display;
+  KfAccessibility? _accessibility;
+  String? _appState;
+  void Function()? _unwatchDevice;
+
   KfSocket? _socket;
   bool _disposed = false;
   Duration _backoff = const Duration(milliseconds: 500);
@@ -132,6 +189,20 @@ class KfInspectorClient implements KfSink {
   void Function()? _unwatchScenarios;
 
   bool get connected => _socket != null;
+
+  // What the host can do besides the basics (optional interfaces, see KfDeviceHost).
+  KfDeviceHost? get _device => switch (host) {
+    final KfDeviceHost d => d,
+    _ => null,
+  };
+  KfTimeHost? get _clock => switch (host) {
+    final KfTimeHost c => c,
+    _ => null,
+  };
+  KfSceneHost? get _scene => switch (host) {
+    final KfSceneHost s => s,
+    _ => null,
+  };
   double get _elapsed => _now() - _recordStart;
 
   /// Installs the hook and starts connecting.
@@ -139,6 +210,13 @@ class KfInspectorClient implements KfSink {
     runtime.install(this);
     _flushTimer = Timer.periodic(batch, (_) => flush());
     _unwatchScenarios = runtime.watchScenarios((names) => _send(KfAppMessage.scenarios(names)));
+    final device = _device;
+    if (device != null) {
+      _display = device.display;
+      _accessibility = device.accessibility;
+      _appState = device.appState;
+      _unwatchDevice = device.watchDevice(_deviceChanged);
+    }
     _connect();
   }
 
@@ -165,11 +243,11 @@ class KfInspectorClient implements KfSink {
   @override
   void signal(KfSignal s) {
     final site = s.site(runtime);
-    final event = KfEvent.signal(site);
-    _catalog['signal:${site.id}'] = event;
+    // The catalog keeps it timeless; the event says, while recording, when it mounted.
+    _catalog['signal:${site.id}'] = KfEvent.signal(site);
     // A value created while recording everything joins the recording (a screen opened mid-recording).
     if (_recordAll) _recording.add(site.id);
-    _enqueue(event);
+    _enqueue(KfEvent.signal(site, t: recording ? _elapsed.round() : null));
   }
 
   /// The value went away (its screen closed): it leaves the catalog. A recording keeps its id, so a
@@ -177,7 +255,7 @@ class KfInspectorClient implements KfSink {
   @override
   void unsignal(String id) {
     if (_catalog.remove('signal:$id') == null) return;
-    _enqueue(KfEvent.unsignal(id));
+    _enqueue(KfEvent.unsignal(id, t: recording ? _elapsed.round() : null));
   }
 
   void _enqueue(Map<String, Object?> e) {
@@ -221,6 +299,7 @@ class KfInspectorClient implements KfSink {
 
   Map<String, Object?> hello() {
     final capture = host?.canCapture ?? false;
+    final device = _device;
     return KfAppMessage.hello(
       app: app,
       platform: platform,
@@ -229,16 +308,43 @@ class KfInspectorClient implements KfSink {
       capture: capture,
       screen: host?.screen,
       scenarios: runtime.scenarioNames,
-      capabilities: ['playback', 'overrides', 'replay', 'scenarios', if (capture) 'capture'],
+      capabilities: [
+        'playback',
+        'overrides',
+        'replay',
+        'scenarios',
+        if (capture) 'capture',
+        if (_clock != null) 'time',
+        if (_scene?.widgetSites ?? false) 'widget-sites',
+      ],
       // The project folder, so the panel can open call sites (`lib/main.dart`) in an editor:
       // `flutter run --dart-define=KEYFRAMER_ROOT=$PWD`.
       root: const String.fromEnvironment('KEYFRAMER_ROOT'),
+      display: device?.display,
+      accessibility: device?.accessibility,
+      device: _deviceInfo,
     );
+  }
+
+  /// What an editor that just joined needs besides hello: the catalog, and the speed when it is not 1.
+  void _greet() {
+    if (_catalog.isNotEmpty) _send(KfAppMessage.events(_catalog.values.toList()));
+    if (_timeScale != 1) _send(KfAppMessage.time(_scaleJson(_timeScale)));
   }
 
   // ── Connection ────────────────────────────────────────────────────────
   Future<void> _connect() async {
     if (_disposed) return;
+    final pending = device;
+    if (pending != null && !_deviceRead) {
+      _deviceRead = true;
+      try {
+        _deviceInfo = await pending.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        // Not known: the hello goes without it.
+      }
+      if (_disposed) return;
+    }
     KfSocket s;
     try {
       s = await connector(url);
@@ -254,6 +360,10 @@ class KfInspectorClient implements KfSink {
     _backoff = const Duration(milliseconds: 500);
     _sub = s.messages.listen(_onMessage, onDone: () => _closed(s), onError: (_) => _closed(s), cancelOnError: true);
     _send(hello());
+    if (_resetPending) {
+      _resetPending = false;
+      _send(KfAppMessage.time(_scaleJson(_timeScale)));
+    }
     flush();
   }
 
@@ -262,6 +372,12 @@ class KfInspectorClient implements KfSink {
     _socket = null;
     _sub = null;
     _editors = 0;
+    // Nobody is left to record for: every recorder goes (the next editor starts its own).
+    if (recording) _dropRecorders();
+    // No editor can see a slowed or paused app any more: it runs at its own speed again, and says so
+    // once it is connected again (after the hello).
+    if (_clock != null && _timeScale != 1) _resetPending = true;
+    _setTimeScale(1);
     _scheduleReconnect();
   }
 
@@ -291,7 +407,8 @@ class KfInspectorClient implements KfSink {
         runtime.replay?.call();
       case 'record':
         final ids = (msg['signalIds'] as List?)?.whereType<String>().toList() ?? const [];
-        setRecording(ids, msg['on'] == true);
+        final recorder = msg['recorder'];
+        setRecording(ids, msg['on'] == true, recorder: recorder is String ? recorder : null);
       case 'playback':
         playback(
           _samplesOf(msg['samples']),
@@ -302,19 +419,117 @@ class KfInspectorClient implements KfSink {
       case 'scenario':
         final name = msg['name'];
         if (name is String) unawaited(_runScenario(name));
+      case 'time':
+        _time(msg);
       case 'presence':
         // A new editor missed the one-off signal reports: send it the catalog.
         final editors = (msg['editors'] as num?)?.toInt() ?? 0;
-        if (editors > _editors && _catalog.isNotEmpty) _send(KfAppMessage.events(_catalog.values.toList()));
+        if (editors > _editors) _greet();
+        // The last editor left: nobody is watching a slowed or paused app, so it runs normally again,
+        // and says so (a relay or room that remembers the speed forgets it).
+        // Nobody left to record for either: every recorder goes.
+        if (editors == 0 && recording) _dropRecorders();
+        if (editors == 0 && _editors > 0) _resetTime();
         _editors = editors;
       case 'hello':
         // A relay that forwards an editor's hello instead of sending presence: the editor still needs
         // the app's hello and the catalog.
         if (msg['role'] == 'editor') {
           _send(hello());
-          if (_catalog.isNotEmpty) _send(KfAppMessage.events(_catalog.values.toList()));
+          _greet();
         }
     }
+  }
+
+  // ── Time ──────────────────────────────────────────────────────────────
+  /// The animation speed an editor set: 1 normal, 0 paused.
+  double get timeScale => _timeScale;
+
+  /// `time`: a speed, 0 to pause, `step` to advance frames while paused. The rules every SDK follows:
+  /// a scale that is missing, not a number, infinite or negative changes nothing; 0 pauses, between 0
+  /// and 0.01 is 0.01, above 1 is 1; `step` counts only while paused (after this message's scale), as
+  /// whole frames from 1 to 120; and the answer is always the speed now in effect (1 when this app
+  /// cannot change it), so every editor shows the same.
+  void _time(Map<String, Object?> msg) {
+    final clock = _clock;
+    final scale = msg['scale'];
+    if (clock != null) {
+      if (scale is num && scale.isFinite && scale >= 0) _setTimeScale(kfTimeScale(scale.toDouble()));
+      final frames = kfStepFrames(msg['step']);
+      if (_timeScale == 0 && frames != null) {
+        try {
+          clock.stepFrames(frames);
+          // Each step on the recording's clock: what moved there moved by `frames` frames at once.
+          if (recording) _marker(KfMarker.time(t: _elapsed.round(), scale: 0, step: frames));
+        } catch (_) {
+          // Stepping is best effort: the app keeps running whatever the clock does.
+        }
+      }
+    }
+    _send(KfAppMessage.time(_scaleJson(_timeScale)));
+  }
+
+  /// Back to normal speed when nobody is watching any more, said every time (`time` scale 1), so a
+  /// relay or room that remembered a slowed or paused app forgets it.
+  void _resetTime() {
+    if (_clock == null) return;
+    _setTimeScale(1);
+    _send(KfAppMessage.time(_scaleJson(_timeScale)));
+  }
+
+  /// A reset that happened while disconnected, announced on the next connection.
+  bool _resetPending = false;
+
+  void _setTimeScale(double scale) {
+    final clock = _clock;
+    if (clock == null || scale == _timeScale) return;
+    double now;
+    try {
+      now = clock.setTimeScale(scale);
+    } catch (_) {
+      return;
+    }
+    if (now == _timeScale) return;
+    _timeScale = now;
+    // Durations on the recording's clock are stretched from here: the marker says by how much.
+    if (recording) _marker(KfMarker.time(t: _elapsed.round(), scale: _scaleJson(now)));
+  }
+
+  // ── Display, accessibility, lifecycle ─────────────────────────────────
+  void _deviceChanged() {
+    final h = _device;
+    if (h == null) return;
+    final t = _elapsed.round();
+    final display = h.display;
+    if (display != null && display != _display) {
+      final rateChanged = _display != null && _display!.hz != display.hz;
+      _display = display;
+      // Frames from here are counted against the new rate.
+      _uiMeter?.display = display;
+      _rasterMeter?.display = display;
+      if (recording && rateChanged) _marker(KfMarker.display(t: t, hz: display.hz));
+    }
+    final accessibility = h.accessibility;
+    if (accessibility != null && accessibility != _accessibility) {
+      _accessibility = accessibility;
+      if (recording) _marker(KfMarker.accessibility(t: t, reduceMotion: accessibility.reduceMotion));
+    }
+    final state = h.appState;
+    if (state != null && state != _appState) {
+      _appState = state;
+      if (recording) _marker(KfMarker.appState(t: t, state: state));
+    }
+  }
+
+  // ── Render hints ──────────────────────────────────────────────────────
+  /// Reports how an animated widget is drawn, once per value and hint: it joins the catalog, so an
+  /// editor that connects later gets it too.
+  void renderHint(KfRenderHint hint) {
+    final key = 'renderHint:${hint.id}:${hint.hint}';
+    if (_catalog.containsKey(key)) return;
+    final event = KfEvent.renderHint(hint);
+    _catalog[key] = event;
+    _enqueue(event);
   }
 
   static Map<String, Map<String, num>> _overrides(Object? json) {
@@ -339,6 +554,7 @@ class KfInspectorClient implements KfSink {
   void Function()? _stopTimings;
   void Function()? _stopTouches;
   void Function()? _stopNav;
+  void Function()? _stopScene;
   Timer? _sampleTimer;
   FrameMeter? _uiMeter;
   FrameMeter? _rasterMeter;
@@ -347,31 +563,63 @@ class KfInspectorClient implements KfSink {
   final Map<int, double> _lastMove = {};
 
   /// Recording everything counts before any value exists.
-  bool get recording => _recording.isNotEmpty || _recordAll;
+  bool get recording => _recorders.isNotEmpty;
 
-  void setRecording(List<String> ids, bool on) {
+  /// Starts or stops one recorder's values (`record`). Several editors can record at once (the panel and
+  /// an agent, or ci): each says who it is with `recorder`, and stopping stops only that one. Requests
+  /// without an id share one anonymous recorder. The app records while any recorder is on, sampling the
+  /// union of their values (`*` in any of them: every value, including ones that mount meanwhile); the
+  /// recording's clock starts when the first one starts.
+  void setRecording(List<String> ids, bool on, {String? recorder}) {
     final was = recording;
-    final all = ids.contains('*');
-    // A recording sees the app live: values held by a scrub go back to it first.
-    if (on && !was) _stopPlayback();
+    final key = recorder ?? '';
     if (on) {
-      if (!recording) _recordStart = _now();
-      if (all) _recordAll = true;
-      _recording.addAll(all ? runtime.signals.keys : ids);
-    } else if (all) {
-      _recordAll = false;
-      _recording.clear();
+      if (ids.isNotEmpty) (_recorders[key] ??= {}).addAll(ids);
     } else {
-      _recording.removeAll(ids);
+      final r = _recorders[key];
+      if (r != null) {
+        if (ids.contains('*')) {
+          r.clear();
+        } else {
+          r.removeAll(ids);
+        }
+        if (r.isEmpty) _recorders.remove(key);
+      }
     }
+    if (recording && !was) {
+      // A recording sees the app live: values held by a scrub go back to it first.
+      _stopPlayback();
+      _recordStart = _now();
+    }
+    _sampleUnion();
     if (was != recording) _measure(recording);
+  }
+
+  /// Who records what: recorder id ('' for editors that send none) to its signal ids or `*`.
+  final Map<String, Set<String>> _recorders = {};
+
+  /// The values to sample: every recorder's, and with `*` every value there is.
+  void _sampleUnion() {
+    _recordAll = _recorders.values.any((ids) => ids.contains('*'));
+    _recording
+      ..clear()
+      ..addAll(_recorders.values.expand((ids) => ids).where((id) => id != '*'));
+    if (_recordAll) _recording.addAll(runtime.signals.keys);
+  }
+
+  void _dropRecorders() {
+    final was = recording;
+    _recorders.clear();
+    _sampleUnion();
+    if (was) _measure(false);
   }
 
   void _measure(bool on) {
     if (on) {
       final h = host;
-      _uiMeter = FrameMeter(kfDartThread, refreshRate: h?.refreshRate ?? 60);
-      _rasterMeter = FrameMeter(kfRasterThread, refreshRate: h?.refreshRate ?? 60);
+      // Counted against the display's rate when the host knows it.
+      _uiMeter = FrameMeter(kfDartThread, refreshRate: h?.refreshRate ?? 60, display: _display);
+      _rasterMeter = FrameMeter(kfRasterThread, refreshRate: h?.refreshRate ?? 60, display: _display);
       _rasterOffset = double.infinity;
       _touchOffset = double.infinity;
       _lastMove.clear();
@@ -389,11 +637,25 @@ class KfInspectorClient implements KfSink {
       _stopNav = runtime.tapNavigation(
         (r) => _marker(KfMarker.navigation(t: _elapsed.round(), route: r.route, params: r.params)),
       );
+      // Started slowed or paused: the recording's clock says so from its first moment.
+      if (_timeScale != 1) _marker(KfMarker.time(t: 0, scale: _scaleJson(_timeScale)));
+      final scene = _scene;
+      if (scene != null) {
+        _stopScene = scene.watchScene(
+          runtime,
+          onVisibility: (id, visible, reason) {
+            if (recording) {
+              _marker(KfMarker.visibility(t: _elapsed.round(), id: id, visible: visible, reason: reason));
+            }
+          },
+          onHint: renderHint,
+        );
+      }
     } else {
-      for (final stop in [_stopFrames, _stopTimings, _stopTouches, _stopNav]) {
+      for (final stop in [_stopFrames, _stopTimings, _stopTouches, _stopNav, _stopScene]) {
         stop?.call();
       }
-      _stopFrames = _stopTimings = _stopTouches = _stopNav = null;
+      _stopFrames = _stopTimings = _stopTouches = _stopNav = _stopScene = null;
       _sampleTimer?.cancel();
       _sampleTimer = null;
       _drainMeters();
@@ -636,11 +898,11 @@ class KfInspectorClient implements KfSink {
     _flushTimer?.cancel();
     _reconnect?.cancel();
     _release?.cancel();
-    if (recording) {
-      _recording.clear();
-      _recordAll = false;
-      _measure(false);
-    }
+    if (recording) _dropRecorders();
+    // Back to normal speed while the connection is still open: say so.
+    if (_timeScale != 1) _resetTime();
+    _unwatchDevice?.call();
+    _unwatchDevice = null;
     _stopPlayback();
     unawaited(_sub?.cancel());
     final s = _socket;
@@ -670,4 +932,21 @@ List<Object?> sanitizeArgs(List<Object?> args) {
 }
 
 num _tenth(double v) => (v * 10).round() / 10;
+
+/// The fastest speed `time` sets, and the most frames one `step` advances.
+const double kfMaxTimeScale = 1;
+const int kfMaxSteps = 120;
+
+/// A requested speed as every SDK applies it: 0 pauses, between 0 and 0.01 is 0.01, above 1 is 1.
+/// Check that it is a finite number of at least 0 first: anything else changes nothing.
+double kfTimeScale(double scale) => scale == 0 ? 0 : scale.clamp(0.01, kfMaxTimeScale).toDouble();
+
+/// The frames a `step` advances: a positive number as a whole one from 1 to 120, else null (no step).
+int? kfStepFrames(Object? step) {
+  if (step is! num || !step.isFinite || step <= 0) return null;
+  return step.round().clamp(1, kfMaxSteps);
+}
+
+/// A speed as JSON: 1 rather than 1.0, 0.25 as it is.
+num _scaleJson(double v) => v == v.roundToDouble() ? v.round() : v;
 String? _nonEmpty(String s) => s.isEmpty ? null : s;

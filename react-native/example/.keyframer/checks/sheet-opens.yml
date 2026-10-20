@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# The bottom sheet opening fully, driven from outside the app by agent-device (npm i -D agent-device),
+# the way a person taps it.
+name: sheet opens fully
+flow:
+  steps:
+    # 8082 is the example's Metro port (package.json's scripts start Metro on it): change both together.
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/sheet
+    - wait: { id: sheet-open-full }
+      timeout: 15s
+    - tap: sheet-open-full
+    - wait: 900ms
+    # Close it again: the next run's deep link lands on this same screen, which keeps its state.
+    - tap: sheet-close
+    - wait: 900ms
+record:
+  speed: 1
+  settle: 800ms
+expect:
+  - value: sheetY
+    settle: < 600ms
+    overshoot: < 5%
+  - frames: { dropped: < 4 }
+  - none: [reduce-motion, unseen, two-writers]

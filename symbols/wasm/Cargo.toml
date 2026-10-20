@@ -1,0 +1,14 @@
+[package]
+name = "keyframer-vitals-symbols-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "WebAssembly bindings for keyframer-vitals-symbols, used by @keyframerdev/vitals-cli."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+keyframer-vitals-symbols = { path = ".." }
+wasm-bindgen = "=0.2.100"

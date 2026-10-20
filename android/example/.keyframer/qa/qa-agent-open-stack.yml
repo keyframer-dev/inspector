@@ -1,0 +1,12 @@
+# QA regression check, bug 10 (agent-device `open <package>` pushes a new MainActivity on every run):
+# the flow only opens the app and waits, so nothing may be "unseen". Today each run adds a MainActivity
+# over the last one, whose pulse loop keeps running covered: "pulse keeps moving while covered by
+# another screen" (#2, #3...) -> FAILS until open brings the existing task to the front.
+name: qa agent open stack
+flow:
+  steps:
+    - open: dev.keyframer.example
+    - wait: 1500ms
+record: { speed: 1, settle: 500ms }
+expect:
+  - none: [unseen]

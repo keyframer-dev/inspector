@@ -1,0 +1,5 @@
+appId: dev.keyframer.example
+---
+- tapOn: "Open detail"
+- waitForAnimationToEnd
+- back

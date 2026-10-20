@@ -196,8 +196,11 @@ public struct ResolvedSite: Hashable, Sendable {
     /// `KeyframerExample.debug.dylib`'s frame: `ViewController.bounce()`.
     public var name: SymbolName
     public var frame: SymbolFrame
-    /// Stable for one build: the symbol plus the return address' offset into it.
-    public var id: String { "\(name.display)+\(frame.offset)" }
+    /// The function, as a person reads it: stable across builds and edits, and the same for every
+    /// property one block animates (a return address' offset was neither: it moved with every edit,
+    /// and differed per property setter). Two separate animations of one property in one function
+    /// share it.
+    public var id: String { name.display }
 }
 
 /// Picks the app's own frame out of a stack and formats stacks for the panel.
@@ -209,7 +212,7 @@ public struct CallSiteResolver: Sendable {
     public var appImages: Set<String>
     public var skippedModules: Set<String>
 
-    public init(executable: String, extraImages: [String] = [], skippedModules: Set<String> = ["KeyframerInspector", "KeyframerInspectorCore"]) {
+    public init(executable: String, extraImages: [String] = [], skippedModules: Set<String> = ["KeyframerInspector", "KeyframerInspectorCore", "KeyframerInspectorSwiftUI"]) {
         var images: Set<String> = [executable, "\(executable).debug.dylib"]
         images.formUnion(extraImages)
         self.appImages = images

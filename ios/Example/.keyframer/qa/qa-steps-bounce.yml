@@ -1,0 +1,17 @@
+# QA driver check (agent-device steps, real taps). Same motion as qa-time-bounce-1x. New bug: some runs
+# fail with "nothing came back from the app while recording (is it in the foreground?)" although the
+# app is in front and the flow taps (4 of 7 ci runs on an iOS 26.5 simulator; none while a
+# `simctl io screenshot` loop ran). Passes when every run records.
+name: qa steps bounce
+flow:
+  steps:
+    - open: dev.keyframer.inspector.example
+    - wait: { id: bounce }
+      timeout: 15s
+    - tap: bounce
+    - wait: 1200ms
+record: { speed: 1, settle: 800ms }
+expect:
+  - value: card.position.y
+    duration: 450ms..900ms
+    overshoot: 10%..15%

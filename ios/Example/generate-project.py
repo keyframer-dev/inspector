@@ -99,6 +99,7 @@ I = {k: oid(k) for k in [
     "project", "main", "products", "app.ref", "uit.ref", "app.group", "uit.group",
     "app.target", "uit.target", "app.sources", "app.frameworks", "app.resources",
     "uit.sources", "uit.frameworks", "uit.resources", "pkg.ref", "pkg.product", "pkg.build",
+    "pkg.swiftui.product", "pkg.swiftui.build",
     "proxy", "dependency", "cl.project", "cl.app", "cl.uit",
     "project.debug", "project.release", "app.debug", "app.release", "uit.debug", "uit.release",
 ]}
@@ -125,12 +126,13 @@ pbx = f"""// !$*UTF8*$!
 	objectVersion = 77;
 	objects = {{
 		{I["pkg.build"]} /* KeyframerInspector in Frameworks */ = {{isa = PBXBuildFile; productRef = {I["pkg.product"]} /* KeyframerInspector */; }};
+		{I["pkg.swiftui.build"]} /* KeyframerInspectorSwiftUI in Frameworks */ = {{isa = PBXBuildFile; productRef = {I["pkg.swiftui.product"]} /* KeyframerInspectorSwiftUI */; }};
 		{I["proxy"]} = {{isa = PBXContainerItemProxy; containerPortal = {I["project"]}; proxyType = 1; remoteGlobalIDString = {I["app.target"]}; remoteInfo = {APP}; }};
 		{I["app.ref"]} = {{isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = {APP}.app; sourceTree = BUILT_PRODUCTS_DIR; }};
 		{I["uit.ref"]} = {{isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = {UITESTS}.xctest; sourceTree = BUILT_PRODUCTS_DIR; }};
 		{I["app.group"]} = {{isa = PBXFileSystemSynchronizedRootGroup; path = {APP}; sourceTree = "<group>"; }};
 		{I["uit.group"]} = {{isa = PBXFileSystemSynchronizedRootGroup; path = {UITESTS}; sourceTree = "<group>"; }};
-{phase("app.frameworks", "PBXFrameworksBuildPhase", I["pkg.build"] + ",")}{phase("uit.frameworks", "PBXFrameworksBuildPhase")}{phase("app.resources", "PBXResourcesBuildPhase")}{phase("uit.resources", "PBXResourcesBuildPhase")}{phase("app.sources", "PBXSourcesBuildPhase")}{phase("uit.sources", "PBXSourcesBuildPhase")}		{I["main"]} = {{
+{phase("app.frameworks", "PBXFrameworksBuildPhase", I["pkg.build"] + ", " + I["pkg.swiftui.build"] + ",")}{phase("uit.frameworks", "PBXFrameworksBuildPhase")}{phase("app.resources", "PBXResourcesBuildPhase")}{phase("uit.resources", "PBXResourcesBuildPhase")}{phase("app.sources", "PBXSourcesBuildPhase")}{phase("uit.sources", "PBXSourcesBuildPhase")}		{I["main"]} = {{
 			isa = PBXGroup;
 			children = (
 				{I["app.group"]},
@@ -166,6 +168,7 @@ pbx = f"""// !$*UTF8*$!
 			name = {APP};
 			packageProductDependencies = (
 				{I["pkg.product"]},
+				{I["pkg.swiftui.product"]},
 			);
 			productName = {APP};
 			productReference = {I["app.ref"]};
@@ -237,6 +240,10 @@ pbx = f"""// !$*UTF8*$!
 		{I["pkg.product"]} /* KeyframerInspector */ = {{
 			isa = XCSwiftPackageProductDependency;
 			productName = KeyframerInspector;
+		}};
+		{I["pkg.swiftui.product"]} /* KeyframerInspectorSwiftUI */ = {{
+			isa = XCSwiftPackageProductDependency;
+			productName = KeyframerInspectorSwiftUI;
 		}};
 	}};
 	rootObject = {I["project"]} /* Project object */;

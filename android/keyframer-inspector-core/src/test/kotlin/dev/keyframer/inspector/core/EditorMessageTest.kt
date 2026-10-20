@@ -10,6 +10,7 @@ class EditorMessageTest {
     fun record() {
         assertEquals(EditorMessage.Record(listOf("*"), true), EditorMessage.parse("""{"type":"record","signalIds":["*"],"on":true}"""))
         assertEquals(EditorMessage.Record(listOf("a", "b"), false), EditorMessage.parse("""{"type":"record","signalIds":["a","b"],"on":false}"""))
+        assertEquals(EditorMessage.Record(listOf("*"), true, "ci"), EditorMessage.parse("""{"type":"record","signalIds":["*"],"on":true,"recorder":"ci"}"""))
     }
 
     @Test
@@ -46,6 +47,20 @@ class EditorMessageTest {
         assertEquals(EditorMessage.Scenario("drag card"), EditorMessage.parse("""{"type":"scenario","name":"drag card"}"""))
         assertEquals(EditorMessage.Presence(true, 2, false), EditorMessage.parse("""{"type":"presence","app":true,"editors":2,"cli":false}"""))
         assertEquals(EditorMessage.Hello("editor"), EditorMessage.parse("""{"type":"hello","role":"editor"}"""))
+    }
+
+    @Test
+    fun time() {
+        assertEquals(EditorMessage.Time(0.25, null), EditorMessage.parse("""{"type":"time","scale":0.25}"""))
+        assertEquals(EditorMessage.Time(0.0, 3), EditorMessage.parse("""{"type":"time","scale":0,"step":3}"""))
+        // The shared rules (TimeRules): nothing usable is still a time message, which the app answers.
+        assertEquals(EditorMessage.Time(null, null), EditorMessage.parse("""{"type":"time","scale":-1,"step":2}"""))
+        assertEquals(EditorMessage.Time(null, null), EditorMessage.parse("""{"type":"time","step":1}"""))
+        assertEquals(EditorMessage.Time(null, null), EditorMessage.parse("""{"type":"time","scale":"fast"}"""))
+        assertEquals(EditorMessage.Time(1.0, null), EditorMessage.parse("""{"type":"time","scale":9,"step":3}"""))
+        assertEquals(EditorMessage.Time(0.01, null), EditorMessage.parse("""{"type":"time","scale":0.001}"""))
+        assertEquals(EditorMessage.Time(0.0, 120), EditorMessage.parse("""{"type":"time","scale":0,"step":500.7}"""))
+        assertEquals(EditorMessage.Time(0.0, null), EditorMessage.parse("""{"type":"time","scale":0,"step":0.5}"""))
     }
 
     @Test

@@ -1,0 +1,21 @@
+{
+  "ok": false,
+  "error": "project paused",
+  "config": {
+    "enabled": false,
+    "sampleRate": 0,
+    "minSdk": {
+      "react-native": "0.0.1",
+      "ios": "0.0.1",
+      "android": "0.0.1",
+      "flutter": "0.0.1"
+    },
+    "collect": {
+      "reduceMotion": false,
+      "deviceModel": true,
+      "development": false
+    },
+    "ttlSec": 86400,
+    "stop": true
+  }
+}

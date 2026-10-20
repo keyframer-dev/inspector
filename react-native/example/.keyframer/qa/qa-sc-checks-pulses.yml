@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (motion checks): two reversing pulses, one with ReduceMotion.Never (app/checks.tsx:35). With
+# Reduce Motion off nothing may be flagged. Run it again with Reduce Motion on: it must then fail on
+# reduce-motion at app/checks.tsx:35 only (the other pulse follows the setting).
+name: qa checks pulses
+flow:
+  scenario: "motion checks: pulses with Reduce Motion on"
+expect:
+  - none: [reduce-motion, unseen, two-writers, jump, error]

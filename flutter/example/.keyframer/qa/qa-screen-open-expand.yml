@@ -1,0 +1,8 @@
+# QA regression check, bug 14 (screen-mount misattribution): expand opens no screen, so no
+# screen-mount problem may appear. Today any dropped frame in the first 900 ms of a recording is
+# "Opening the / screen dropped frames" (flaky: needs a dropped frame).
+name: qa screen-open expand
+flow: { scenario: expand }
+record: { speed: 1, settle: 800ms }
+expect:
+  - none: [screen-mount]

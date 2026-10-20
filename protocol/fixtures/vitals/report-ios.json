@@ -1,0 +1,234 @@
+{
+  "format": "keyframer-vitals",
+  "version": 1,
+  "app": {
+    "id": "com.acme.shop",
+    "version": "3.4.0",
+    "build": "412",
+    "platform": "ios",
+    "framework": "SwiftUI",
+    "environment": "production"
+  },
+  "sdk": {
+    "name": "KeyframerVitals",
+    "version": "0.1.0"
+  },
+  "device": {
+    "os": "ios",
+    "osMajor": 18,
+    "model": "iPhone15,3",
+    "tier": "high",
+    "memoryGb": 6
+  },
+  "display": {
+    "hz": 120,
+    "adaptive": true,
+    "targetHz": 120
+  },
+  "state": {
+    "reduceMotion": false,
+    "lowPower": true,
+    "thermal": "fair"
+  },
+  "session": {
+    "nonce": "Vn3kQ8sLp0Za7Wd2",
+    "seq": 1,
+    "sampleRate": 0.25,
+    "foregroundMs": 600000,
+    "measuredMs": 58400,
+    "ended": "window"
+  },
+  "screens": [
+    {
+      "name": "HomeView",
+      "ms": 380000,
+      "threads": {
+        "js": {
+          "frames": 5730,
+          "hist": [
+            5480,
+            140,
+            61,
+            30,
+            12,
+            5,
+            2,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 4591.7,
+          "idleFrames": 1900,
+          "idleMissed": 21
+        }
+      }
+    },
+    {
+      "name": "ProfileViewController",
+      "ms": 150000,
+      "threads": {
+        "js": {
+          "frames": 1350,
+          "hist": [
+            1260,
+            52,
+            21,
+            9,
+            4,
+            2,
+            1,
+            1
+          ],
+          "frozen": 1,
+          "hitchMs": 2029.2,
+          "idleFrames": 420,
+          "idleMissed": 6
+        }
+      }
+    },
+    {
+      "name": "Settings",
+      "ms": 70000,
+      "threads": {
+        "js": {
+          "frames": 423,
+          "hist": [
+            410,
+            9,
+            3,
+            1,
+            0,
+            0,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 154.2,
+          "idleFrames": 200,
+          "idleMissed": 2
+        }
+      }
+    }
+  ],
+  "sites": [
+    {
+      "ref": {
+        "kind": "name",
+        "name": "card-expand",
+        "type": "CardView"
+      },
+      "key": "card-expand",
+      "fn": "withAnimation",
+      "component": "CardView",
+      "prop": "scaleEffect",
+      "screen": 0,
+      "runs": 54,
+      "activeMs": 21600,
+      "frames": 2480,
+      "missed": 188,
+      "hitchMs": 1720.6,
+      "worstMs": 66.4,
+      "runsReduceMotion": 0
+    },
+    {
+      "ref": {
+        "kind": "native",
+        "image": 0,
+        "offset": 1715004,
+        "type": "ProfileHeaderView"
+      },
+      "fn": "UIView.animate",
+      "component": null,
+      "prop": "alpha",
+      "screen": 1,
+      "runs": 9,
+      "activeMs": 2700,
+      "frames": 290,
+      "missed": 61,
+      "hitchMs": 830.2,
+      "worstMs": 812.5,
+      "runsReduceMotion": 0
+    },
+    {
+      "ref": {
+        "kind": "native",
+        "image": 1,
+        "offset": 88120
+      },
+      "fn": "UIViewPropertyAnimator",
+      "component": null,
+      "prop": null,
+      "screen": 0,
+      "runs": 21,
+      "activeMs": 6300,
+      "frames": 720,
+      "missed": 37,
+      "hitchMs": 402.9,
+      "worstMs": 98.1,
+      "runsReduceMotion": 0
+    }
+  ],
+  "worst": [
+    {
+      "thread": "js",
+      "ms": 812.5,
+      "missed": 97,
+      "screen": 1,
+      "sites": [
+        1
+      ],
+      "cause": "screen-mount",
+      "afterNavMs": 140
+    },
+    {
+      "thread": "js",
+      "ms": 98.1,
+      "missed": 11,
+      "screen": 0,
+      "sites": [
+        2
+      ],
+      "cause": "unknown"
+    },
+    {
+      "thread": "js",
+      "ms": 66.4,
+      "missed": 7,
+      "screen": 0,
+      "sites": [
+        0,
+        2
+      ],
+      "cause": "burst"
+    },
+    {
+      "thread": "js",
+      "ms": 49.9,
+      "missed": 5,
+      "screen": 0,
+      "sites": [],
+      "cause": "scroll"
+    },
+    {
+      "thread": "js",
+      "ms": 33.2,
+      "missed": 3,
+      "screen": 1,
+      "sites": [],
+      "cause": "gesture"
+    }
+  ],
+  "images": [
+    {
+      "debugId": "6f1c0a2e9b8d4e57a1c3f09d2b6e8a41",
+      "kind": "macho",
+      "name": "Acme",
+      "arch": "arm64"
+    },
+    {
+      "debugId": "0b9e7d24c5a143f8b2e6d71c9a3f5e08",
+      "kind": "macho",
+      "name": "AcmeUI.framework/AcmeUI",
+      "arch": "arm64"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA (probe, slowed recording): welcome-entrance.yml's own expectations and settle (1500 ms), recorded at
+# a quarter of the speed. The badge needs about 2.2 s of animation after the replay; the scenario waits
+# in real time (the app's code), and ci runs the settle on the app's clock (R6a: 6 s real here), so
+# the badge settles inside the recording. Passes only if settle is read on the app's clock, as the 1x
+# check reads it.
+name: qa slow probe settle
+flow:
+  scenario: "welcome: replay the entrance"
+record:
+  speed: 0.25
+  settle: 1500ms
+expect:
+  - value: badge
+    overshoot: < 12%
+    settle: < 2.5s

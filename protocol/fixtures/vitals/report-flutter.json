@@ -1,0 +1,237 @@
+{
+  "format": "keyframer-vitals",
+  "version": 1,
+  "app": {
+    "id": "com.acme.shop",
+    "version": "3.4.0",
+    "build": "412",
+    "platform": "flutter",
+    "framework": "Flutter",
+    "environment": "production"
+  },
+  "sdk": {
+    "name": "keyframer_vitals",
+    "version": "0.1.0"
+  },
+  "device": {
+    "os": "android",
+    "osMajor": 13,
+    "model": "SM-G991B",
+    "tier": "mid",
+    "memoryGb": 8
+  },
+  "display": {
+    "hz": 120,
+    "adaptive": true,
+    "targetHz": 60
+  },
+  "state": {
+    "lowPower": false,
+    "thermal": "serious"
+  },
+  "session": {
+    "nonce": "Lk2Pz7Qe5Yw1Hs9d",
+    "seq": 0,
+    "sampleRate": 0.1,
+    "foregroundMs": 96000,
+    "measuredMs": 21700,
+    "ended": "unknown"
+  },
+  "screens": [
+    {
+      "name": "/feed",
+      "ms": 64000,
+      "threads": {
+        "ui": {
+          "frames": 951,
+          "hist": [
+            880,
+            41,
+            16,
+            8,
+            3,
+            2,
+            1,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 2791.7,
+          "idleFrames": 300,
+          "idleMissed": 6
+        },
+        "js": {
+          "frames": 951,
+          "hist": [
+            900,
+            30,
+            12,
+            6,
+            2,
+            1,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 1666.7,
+          "idleFrames": 300,
+          "idleMissed": 4
+        }
+      }
+    },
+    {
+      "name": "/users/[id]",
+      "ms": 32000,
+      "threads": {
+        "ui": {
+          "frames": 411,
+          "hist": [
+            380,
+            18,
+            7,
+            3,
+            1,
+            1,
+            0,
+            1
+          ],
+          "frozen": 1,
+          "hitchMs": 1766.7,
+          "idleFrames": 120,
+          "idleMissed": 3
+        },
+        "js": {
+          "frames": 412,
+          "hist": [
+            392,
+            12,
+            5,
+            2,
+            1,
+            0,
+            0,
+            0
+          ],
+          "frozen": 0,
+          "hitchMs": 591.7,
+          "idleFrames": 120,
+          "idleMissed": 2
+        }
+      }
+    }
+  ],
+  "sites": [
+    {
+      "ref": {
+        "kind": "name",
+        "name": "hero-image",
+        "type": "_HeroImageState"
+      },
+      "key": "hero-image",
+      "fn": "KfAnimationController",
+      "component": "HeroImage",
+      "prop": null,
+      "screen": 1,
+      "runs": 5,
+      "activeMs": 2000,
+      "frames": 110,
+      "missed": 61,
+      "hitchMs": 1240.8,
+      "worstMs": 745.3
+    },
+    {
+      "ref": {
+        "kind": "source",
+        "file": "lib/feed/card.dart",
+        "line": 57,
+        "column": 12
+      },
+      "key": "lib/feed/card.dart#FeedCard#AnimationController.forward#scale#1",
+      "fn": "AnimationController.forward",
+      "component": "FeedCard",
+      "prop": "scale",
+      "screen": 0,
+      "runs": 22,
+      "activeMs": 6600,
+      "frames": 380,
+      "missed": 44,
+      "hitchMs": 690.5,
+      "worstMs": 151.7
+    },
+    {
+      "ref": {
+        "kind": "native",
+        "image": 0,
+        "offset": 2310456,
+        "type": "_FeedListState"
+      },
+      "fn": "AnimatedContainer",
+      "component": null,
+      "prop": "height",
+      "screen": 0,
+      "runs": 9,
+      "activeMs": 2700,
+      "frames": 150,
+      "missed": 12,
+      "hitchMs": 201.2,
+      "worstMs": 67.5
+    }
+  ],
+  "worst": [
+    {
+      "thread": "ui",
+      "ms": 745.3,
+      "missed": 44,
+      "screen": 1,
+      "sites": [
+        0
+      ],
+      "cause": "screen-mount",
+      "afterNavMs": 420
+    },
+    {
+      "thread": "ui",
+      "ms": 151.7,
+      "missed": 8,
+      "screen": 0,
+      "sites": [
+        1
+      ],
+      "cause": "unknown"
+    },
+    {
+      "thread": "js",
+      "ms": 118.4,
+      "missed": 6,
+      "screen": 0,
+      "sites": [],
+      "cause": "scroll"
+    },
+    {
+      "thread": "ui",
+      "ms": 67.5,
+      "missed": 3,
+      "screen": 0,
+      "sites": [
+        1,
+        2
+      ],
+      "cause": "gesture"
+    },
+    {
+      "thread": "js",
+      "ms": 52,
+      "missed": 2,
+      "screen": 1,
+      "sites": [],
+      "cause": "unknown"
+    }
+  ],
+  "images": [
+    {
+      "debugId": "8d2f61c0b7e94a3c5f1e08d9a6b4c27e13f5a9d0",
+      "kind": "elf",
+      "name": "libapp.so",
+      "arch": "arm64"
+    }
+  ]
+}

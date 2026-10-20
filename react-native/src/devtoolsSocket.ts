@@ -10,7 +10,8 @@
  *   - PING is answered with PONG, so the client's heartbeat stays happy;
  *   - an editor's `hello` becomes a `presence` with one more editor, which makes the client re-send its
  *     catalog of signals and styles, and the app's own `hello` is re-sent so a panel opened after the
- *     app still learns its name.
+ *     app still learns its name, followed by its last `time` answer: a hello alone means normal speed,
+ *     and an app left slowed or paused must not look like it runs at 1× in a panel opened later.
  *
  * Pure and injectable (the dev tools client is passed in) so it runs under vitest.
  */
@@ -44,6 +45,7 @@ export function devToolsSocket(getClient: () => Promise<DevToolsClientLike>): So
     private sub: { remove(): void } | null = null
     private editors = 0
     private appHello: string | null = null
+    private appTime: string | null = null
 
     constructor(_url: string) {
       getClient().then(
@@ -68,7 +70,12 @@ export function devToolsSocket(getClient: () => Promise<DevToolsClientLike>): So
         setTimeout(() => this.deliver(PONG), 0)
         return
       }
-      if (data.startsWith('{"type":"hello"')) this.appHello = data
+      if (data.startsWith('{"type":"hello"')) {
+        this.appHello = data
+        // A new hello is a fresh start (a reload): the speed it ran at before is not this one's.
+        this.appTime = null
+      }
+      if (data.startsWith('{"type":"time"')) this.appTime = data
       this.client?.sendMessage(DEVTOOLS_METHOD, data)
     }
 
@@ -96,6 +103,7 @@ export function devToolsSocket(getClient: () => Promise<DevToolsClientLike>): So
       if (type === 'hello' && role === 'editor') {
         this.editors += 1
         if (this.appHello) this.client?.sendMessage(DEVTOOLS_METHOD, this.appHello)
+        if (this.appHello && this.appTime) this.client?.sendMessage(DEVTOOLS_METHOD, this.appTime)
         this.deliver(JSON.stringify({ type: 'presence', app: true, editors: this.editors, cli: false }))
         return
       }

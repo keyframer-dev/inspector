@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- A window for the views the visibility tests move around. -->
+        <activity android:name="dev.keyframer.inspector.TestActivity" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

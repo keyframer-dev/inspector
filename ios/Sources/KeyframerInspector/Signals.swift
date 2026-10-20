@@ -17,9 +17,13 @@ struct LayerNaming: Hashable {
 
 /// The layers being watched, one track per scalar property, by signal id. A layer that is replaced
 /// (a screen shown again) takes over its id, so recordings follow it like React Native's shared values.
+/// Values the app pushes (KeyframerInspectorSwiftUI's traces) are tracks too, read from their source.
 @MainActor final class SignalRegistry {
     final class Track {
         weak var layer: CALayer?
+        /// For a pushed value: where it lives (freed with the view that pushed it) and which scalar.
+        weak var source: KeyframerValueSource?
+        let index: Int
         let path: String
         let site: InspectorSignalSite
 
@@ -27,6 +31,23 @@ struct LayerNaming: Hashable {
             self.layer = layer
             self.path = path
             self.site = site
+            index = 0
+        }
+
+        init(source: KeyframerValueSource, index: Int, site: InspectorSignalSite) {
+            self.source = source
+            self.index = index
+            path = ""
+            self.site = site
+        }
+
+        var isAlive: Bool { layer != nil || source != nil }
+
+        /// What shows now: the layer's presentation value, or the value last pushed.
+        func read() -> Double? {
+            if let layer { return LayerValue.number((layer.presentation() ?? layer).value(forKeyPath: path)) }
+            guard let source, index < source.values.count, source.values[index].isFinite else { return nil }
+            return source.values[index]
         }
     }
 
@@ -53,9 +74,26 @@ struct LayerNaming: Hashable {
         return site
     }
 
-    /// Forgets the tracks whose layer was freed (their screen closed). Returns their ids, for `unsignal`.
+    /// Registers one pushed scalar. Returns its site when the id is new.
+    func ensure(source: KeyframerValueSource, index: Int, site: InspectorSignalSite) -> InspectorSignalSite? {
+        if let existing = tracks[site.id] {
+            if existing.source !== source || existing.index != index { tracks[site.id] = Track(source: source, index: index, site: existing.site) }
+            return nil
+        }
+        tracks[site.id] = Track(source: source, index: index, site: site)
+        order.append(site.id)
+        return site
+    }
+
+    /// The signal ids of one layer's tracks.
+    func ids(of layer: CALayer) -> [String] {
+        order.filter { tracks[$0]?.layer === layer }
+    }
+
+    /// Forgets the tracks whose layer (or pushed value) was freed: their screen closed. Returns their
+    /// ids, for `unsignal`.
     func prune() -> [String] {
-        let gone = order.filter { tracks[$0]?.layer == nil }
+        let gone = order.filter { tracks[$0]?.isAlive != true }
         guard !gone.isEmpty else { return [] }
         for id in gone { tracks[id] = nil }
         order.removeAll { tracks[$0] == nil }

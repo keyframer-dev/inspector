@@ -36,7 +36,29 @@ export function isInspectorFrame(f: StackFrame): boolean {
 
 /** A frame of a library (node_modules) or one Metro collapsed. */
 export function isLibraryFrame(f: StackFrame): boolean {
-  return !!f.collapse || /[/\\]node_modules[/\\]/.test(f.file)
+  // Hermes's own JavaScript (InternalBytecode.js: Promise, timers, the module system) is not the app's.
+  return !!f.collapse || /[/\\]node_modules[/\\]/.test(f.file) || /(^|[/\\])InternalBytecode\.js$/.test(f.file)
+}
+
+/**
+ * The Metro that served a stack's bundle (React Native frames are bundle URLs), as this machine reaches
+ * it: an Android emulator's alias for it (10.0.2.2) is localhost. Null when the stack names none.
+ */
+export function stackMetro(stack: string): string | null {
+  const m = /\b(https?):\/\/([^/\s:)]+)(?::(\d+))?\/[^\s)]*\.bundle/.exec(stack)
+  if (!m) return null
+  const host = m[2] === '10.0.2.2' || m[2] === '10.0.3.2' ? '127.0.0.1' : m[2]!
+  return `${m[1]}://${host}${m[3] ? `:${m[3]}` : ''}`
+}
+
+/**
+ * Which Metro symbolicates a stack: the one given (--metro), the channel when it is Metro, else the one
+ * that served the bundle (over the relay, the channel is the relay), else localhost:8081.
+ */
+export function metroFor(stack: string, given: string | null | undefined, channel: string | null | undefined): string {
+  if (given) return given
+  if (channel && /^https?:\/\//.test(channel)) return channel
+  return stackMetro(stack) ?? 'http://localhost:8081'
 }
 
 /** `file` relative to the project when it is inside it. */

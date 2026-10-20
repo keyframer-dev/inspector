@@ -8,7 +8,9 @@ import UIKit
 struct RecordedAnimation {
     weak var layer: CALayer?
     let anim: CAAnimation
-    /// When it began, in media time (CACurrentMediaTime).
+    /// When it began, on the layer's own clock: its local time, the one Core Animation keeps an
+    /// animation's beginTime in. It stays right whatever the window's clock does afterwards (slow
+    /// motion, a pause), where a media time would not.
     let begin: CFTimeInterval
     /// The layer kept its end value afterwards (UIKit sets the model first): held after it ends. A
     /// transient one (a spin that leaves the model alone) shows only while it runs.
@@ -64,6 +66,9 @@ struct RecordedAnimation {
 /// began (`beginTime` on the layer's clock); the app's attached animations are never removed (that
 /// would fire their completion handlers). `end()` takes the copies off and restores each layer's
 /// speed, timeOffset and beginTime, so the app continues on the real clock as if nothing happened.
+///
+/// A recording made while the editor slowed, paused or stepped time (WindowClocks) is seeked through
+/// that window's clock history, so a moment of the recording lands where the animations really were.
 @MainActor final class Scrubber {
     private struct Frozen {
         let layer: WeakBox<CALayer>
@@ -79,25 +84,34 @@ struct RecordedAnimation {
 
     var isActive: Bool { !frozen.isEmpty }
 
-    /// `media`: the moment to show, in media time.
-    func seek(toMedia media: CFTimeInterval, live: [CALayer], recorded: [RecordedAnimation]) {
+    /// `media`: the moment to show, in media time. `context`: the time-controlled window a layer is in,
+    /// with its clock's history (WindowClocks.context).
+    func seek(toMedia media: CFTimeInterval, live: [CALayer], recorded: [RecordedAnimation], context: (CALayer) -> (root: CALayer, map: TimeMap)? = { _ in nil }) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
-        if !isActive { begin(live: live, recorded: recorded) }
+        if !isActive { begin(live: live, recorded: recorded, context: context) }
         for (_, f) in frozen {
             f.layer.value?.timeOffset = f.clock.local(atMedia: media)
         }
     }
 
-    private func begin(live: [CALayer], recorded: [RecordedAnimation]) {
+    private func begin(live: [CALayer], recorded: [RecordedAnimation], context: (CALayer) -> (root: CALayer, map: TimeMap)?) {
         let now = CACurrentMediaTime()
         func freeze(_ layer: CALayer) -> Frozen {
             let id = ObjectIdentifier(layer)
             if let f = frozen[id] { return f }
-            let local0 = layer.convertTime(now, from: nil)
-            let rate = layer.convertTime(now + 1, from: nil) - local0
-            let f = Frozen(layer: WeakBox(layer), speed: layer.speed, timeOffset: layer.timeOffset, beginTime: layer.beginTime, clock: LayerClock(local0: local0, media0: now, rate: rate), added: [])
+            let clock: LayerClock
+            if let (root, map) = context(layer) {
+                // Measured against the window's clock, not media time: a paused window has no rate.
+                let w0 = map.local(atMedia: now)
+                let local0 = layer.convertTime(w0, from: root)
+                clock = LayerClock(local0: local0, media0: now, rate: layer.convertTime(w0 + 1, from: root) - local0, map: map)
+            } else {
+                let local0 = layer.convertTime(now, from: nil)
+                clock = LayerClock(local0: local0, media0: now, rate: layer.convertTime(now + 1, from: nil) - local0)
+            }
+            let f = Frozen(layer: WeakBox(layer), speed: layer.speed, timeOffset: layer.timeOffset, beginTime: layer.beginTime, clock: clock, added: [])
             frozen[id] = f
             return f
         }
@@ -111,7 +125,7 @@ struct RecordedAnimation {
         for rec in recorded.sorted(by: { $0.begin < $1.begin }) {
             guard let layer = rec.layer, let copy = rec.anim.copy() as? CAAnimation else { continue }
             var f = freeze(layer)
-            let begin = f.clock.local(atMedia: rec.begin)
+            let begin = rec.begin
             let root = AnimationInfo.keyPath(of: copy).split(separator: ".").first.map(String.init) ?? ""
             if rec.holdsEnd, based.insert("\(ObjectIdentifier(layer).hashValue)|\(root)").inserted, let base = Self.startValue(of: copy) {
                 let hold = CABasicAnimation(keyPath: base.keyPath)

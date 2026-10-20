@@ -1,0 +1,8 @@
+# QA driver check (Maestro): taps Bounce with the maestro CLI (or --maestro-driver agent-device).
+name: qa maestro bounce
+flow: { maestro: .keyframer/qa/flows/qa-bounce-maestro.yaml }
+record: { speed: 1, settle: 1200ms }
+expect:
+  - value: card.position.y
+    duration: 450ms..900ms
+    overshoot: 10%..15%

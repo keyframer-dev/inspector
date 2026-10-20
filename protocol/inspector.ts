@@ -46,8 +46,19 @@ export type InspectorSignalSite = {
   column?: number
   component: string | null
   name: string | null
-  /** `scroll`: a list's offset (playback scrolls the real list). Ids of React Native scroll tracks also say so (`scroll:file:line:x`). */
-  kind?: 'value' | 'scroll'
+  /**
+   * `scroll`: a list's offset (playback scrolls the real list). Ids of React Native scroll tracks also
+   * say so (`scroll:file:line:x`). `time`: an animation's play time (ms), the track playback writes to
+   * replay an animator whose value is read-only. Not a value on screen: the motion problems (unseen,
+   * jumps, two writers, Reduce Motion) skip it.
+   */
+  kind?: 'value' | 'scroll' | 'time'
+  /**
+   * The property it animates, when the SDK knows one (a Flutter implicit animation: 'opacity',
+   * 'scale', 'position'; several comma-joined, 'size,color'). The problems engine reads 'opacity',
+   * 'alpha' and colors as fades, which Reduce Motion allows.
+   */
+  prop?: string
   /** False when playback cannot write it back (a value the platform only reads). */
   writable?: boolean
 }
@@ -107,7 +118,45 @@ export type InspectorAppInfo = {
   threads?: InspectorThreads
   /** How it was built: frame times in a debug build are inflated (see InspectorBuild). */
   build?: InspectorBuild
+  display?: InspectorDisplay
+  accessibility?: InspectorAccessibility
+  device?: InspectorDevice
 }
+
+/**
+ * The device the app runs on, so a runner can tell apps apart on one relay (one check on several
+ * simulators at once). `id`: SIMULATOR_UDID on an iOS simulator, the AVD name on an Android emulator.
+ * `model`: hw.machine on iOS, Build.MODEL on Android.
+ *
+ * Privacy: `name` and `id` are only for simulators and emulators. A physical device reports `model`
+ * (and `simulator: false`) but never its user-given name ("Catalin's iPhone"), since recordings get
+ * shared.
+ */
+export type InspectorDevice = { name?: string; model?: string; id?: string; simulator?: boolean }
+
+/**
+ * The screen the app draws on. Its refresh rate sets the frame budget (1000 / hz ms: 16.7 ms at 60 Hz,
+ * 8.3 ms at 120 Hz), and frames are counted as dropped against it. `adaptive`: the rate follows the
+ * content (ProMotion, Android's variable refresh), and `hz` is the highest it runs at. Without it: 60 Hz.
+ */
+export type InspectorDisplay = { hz: number; adaptive?: boolean }
+
+/**
+ * The person's motion settings: Reduce Motion on iOS and macOS, Remove animations on Android (an
+ * animator duration scale of 0), `disableAnimations` in Flutter, `prefers-reduced-motion` on the web.
+ * An animation that still runs while it is on is a problem, an accessibility one.
+ */
+export type InspectorAccessibility = { reduceMotion: boolean }
+
+/**
+ * Something about how an animated view is drawn that costs the frame thread or the GPU more than it
+ * needs to, seen by the SDK on the view itself: a shadow without a path, a mask or a blur over moving
+ * content, group opacity forcing an offscreen pass, Flutter's Opacity animating where a FadeTransition
+ * would not repaint. `id` is the signal (or call site) it belongs to; `hint` a stable key the problems
+ * engine words a fix for ("shadow-path", "mask", "blur", "group-opacity", "opacity-widget",
+ * "layer-alpha", "rasterize"); `detail` says what the SDK saw.
+ */
+export type InspectorRenderHint = { id: string; hint: string; detail?: string }
 
 /**
  * How the app was built. A debug build runs extra checks (React Native's dev mode, Flutter's JIT and
@@ -116,8 +165,12 @@ export type InspectorAppInfo = {
  */
 export type InspectorBuild = 'debug' | 'profile' | 'release'
 
-/** What an app can do besides reporting: the panel and the MCP server only offer what it has. */
-export type InspectorCapability = 'capture' | 'playback' | 'scrub' | 'overrides' | 'replay' | 'reload' | 'scenarios' | 'recordings' | (string & {})
+/**
+ * What an app can do besides reporting: the panel and the MCP server only offer what it has.
+ * `widget-sites` (Flutter): widget creation tracking is on, so implicit animations, Hero sites and
+ * render-hint locations are reported; a Flutter app without it reports none of them.
+ */
+export type InspectorCapability = 'capture' | 'playback' | 'scrub' | 'overrides' | 'replay' | 'reload' | 'scenarios' | 'recordings' | 'time' | 'widget-sites' | (string & {})
 
 /** What the app reports while it runs. */
 export type InspectorEvent =
@@ -139,10 +192,17 @@ export type InspectorEvent =
       /** How long it runs, delay included, when the app knows: otherwise the reader estimates it from `fn` and `args`. */
       durationMs?: number
     }
-  | { kind: 'signal'; site: InspectorSignalSite }
-  /** A value that went away (its screen closed): it leaves the catalog. Recordings keep what they sampled. */
-  | { kind: 'unsignal'; id: string }
+  /**
+   * A value was registered. `t`, while recording: when, on the recording's clock (the same one samples
+   * use). A screen that remounts registers its values again under the same ids: from `t` on, samples
+   * under the id are the new instance's (see InspectorMount).
+   */
+  | { kind: 'signal'; site: InspectorSignalSite; t?: number }
+  /** A value that went away (its screen closed): it leaves the catalog. Recordings keep what they sampled. `t`, while recording: when it went away. */
+  | { kind: 'unsignal'; id: string; t?: number }
   | { kind: 'style'; site: InspectorStyleSite }
+  /** See InspectorRenderHint. Sent once per view and hint, when the SDK first sees it. */
+  | ({ kind: 'renderHint' } & InspectorRenderHint)
 
 // ─── Live inspector protocol ────────────────────────────────────────────────────
 // Three parties meet in one pairing room (a Durable Object on the API, joined with a short code):
@@ -226,6 +286,32 @@ export type InspectorMarker =
    * callback, where the finger was on screen. Touches the gesture took over continue here.
    */
   | { kind: 'gesture'; t: number; gesture: string; on: string; handler: number; x: number | null; y: number | null; site: string; component: string | null }
+  /** The person's motion settings changed while recording (see InspectorAccessibility). */
+  | { kind: 'accessibility'; t: number; reduceMotion: boolean }
+  /** The refresh rate changed while recording: low power mode, ProMotion dropping to 60 Hz. */
+  | { kind: 'display'; t: number; hz: number }
+  /**
+   * An animated value's view left the screen or came back: scrolled away, covered by another screen,
+   * hidden (alpha 0, isHidden, Visibility.GONE), removed from the window. A value that keeps moving
+   * while its view is not visible spends frames nobody sees. `id` is a signal id. The app going to the
+   * background is an `appState` marker instead.
+   */
+  | { kind: 'visibility'; t: number; id: string; visible: boolean; reason?: 'offscreen' | 'hidden' | 'detached' | 'covered' }
+  /**
+   * The editor changed the app's animation speed while recording (the `time` message): durations on
+   * the recording's clock between this marker and the next are stretched by 1 / scale. 0: paused.
+   * `step`, while paused: the app advanced this many frames at once (the `time` message's step), at
+   * the display's rate, at `t`; one marker per step.
+   */
+  | { kind: 'time'; t: number; scale: number; step?: number }
+
+/**
+ * A value mounting or going away while recording (from `signal` and `unsignal` events with `t`). A
+ * screen that remounts gives its values new instances under the same ids: samples from a mount's `t`
+ * on are that instance's, a series of their own (the jump from the old instance's last value to the
+ * new one's first is not motion).
+ */
+export type InspectorMount = { id: string; t: number; mounted: boolean }
 
 /** A screen the app was on: what playback navigates back to. */
 export type InspectorRoute = { t: number; route: string; params?: Record<string, unknown> }
@@ -261,6 +347,11 @@ export type InspectorStackFrame = {
  * through a newer bundle would point at the wrong lines.
  */
 export type InspectorRecordedAnim = {
+  /**
+   * The `anim` event's `eid`, when it was kept: an animation whose call another one's arguments point
+   * at (an InspectorAnimRef) is written inside that one (withDelay(…, withTiming(…)) is one write).
+   */
+  eid?: number
   t: number
   thread: InspectorThread
   site: InspectorCallSite
@@ -292,6 +383,10 @@ export type InspectorRecording = {
   work?: InspectorUiWork[]
   /** The animated styles and which shared value feeds which style property (layout properties cost a layout pass). */
   styles?: InspectorStyleSite[]
+  /** What the SDK saw about how animated views are drawn (newer recordings). */
+  hints?: InspectorRenderHint[]
+  /** When values mounted and went away while recording (newer recordings; see InspectorMount). */
+  mounts?: InspectorMount[]
   /** What the person who recorded it wrote about it. */
   note?: string
   /** What was taken out before it was shared as a link (see redactRecording). */
@@ -363,6 +458,12 @@ export type InspectorAppMessage =
        * paths (`app/feed.tsx`, `lib/main.dart`) resolve against it to open in an editor.
        */
       root?: string
+      /** The display's refresh rate (see InspectorDisplay). Without it: 60 Hz. */
+      display?: InspectorDisplay
+      /** The person's motion settings (see InspectorAccessibility); a change while running is a marker. */
+      accessibility?: InspectorAccessibility
+      /** Which device it runs on (see InspectorDevice for what a physical device may say). */
+      device?: InspectorDevice
     }
   /** The registered scenarios changed. */
   | { type: 'scenarios'; names: string[] }
@@ -386,6 +487,8 @@ export type InspectorAppMessage =
   | { type: 'recording'; recording: InspectorRecording }
   /** The answer to `capture`: the screen as a base64 image, or why there is none. `format` may differ from the one asked for. */
   | { type: 'frame'; id: string; data?: string; format?: 'jpg' | 'png'; error?: string }
+  /** The app's animation speed now, after a `time` message (or on hello, when it is not 1): every editor shows the same. */
+  | { type: 'time'; scale: number }
 
 /** editor → app (and cli for `apply`) */
 export type InspectorEditorMessage =
@@ -402,8 +505,17 @@ export type InspectorEditorMessage =
   /**
    * Start / stop recording samples for these signal ids. `['*']`: every shared value, including those
    * that mount while recording (a screen opened mid-recording).
+   *
+   * `recorder`: who is recording, an id the editor picks and keeps for its connection (the MCP server,
+   * ci, the panel, the e2e fixture). The app keeps the recorders that are on and records while any is,
+   * sampling the union of their signal ids (`*` in any of them: every value, including ones that mount
+   * meanwhile). `on: false` stops only that recorder: its listed ids, or all of it with `*`. Requests
+   * without `recorder` share one anonymous recorder, so older editors still behave as before among
+   * themselves. When the last editor leaves (presence editors 0), the app drops every recorder.
+   * Samples, frames and the rest still go to every editor; an editor keeps what arrives while its own
+   * recorder is on.
    */
-  | { type: 'record'; signalIds: string[]; on: boolean }
+  | { type: 'record'; signalIds: string[]; on: boolean; recorder?: string }
   /** Run a registered scenario; the app answers with scenarioDone. */
   | { type: 'scenario'; name: string }
   /**
@@ -423,6 +535,15 @@ export type InspectorEditorMessage =
    * for apps with the `scrub` capability; the others get `playback` with one sample per value.
    */
   | { type: 'scrub'; t: number | null }
+  /**
+   * Run the app's animations at another speed, pause them or step them, for apps with the `time`
+   * capability. `scale`: 1 is normal, 0.25 a quarter of the speed, 0 paused. `step`, sent while paused:
+   * advance this many frames at the display's rate, then hold again. Each platform uses its own clock:
+   * React Native Reanimated's frame timestamps, Flutter's timeDilation (and its scheduler while paused),
+   * the key window layer's speed on iOS, the animator duration scale on Android. The app answers with
+   * `time`, so every editor shows the same state.
+   */
+  | { type: 'time'; scale: number; step?: number }
   /** Write tuned values to the source files (handled by the cli). */
   | { type: 'apply'; edits: Array<{ file: string; line: number; column: number; fn: string; path: string; value: number }> }
   /** Ask the cli for these source files (paths as call sites report them), to rebuild the screen's views. */

@@ -18,14 +18,21 @@ import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.view.animation.OvershootInterpolator
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import dev.keyframer.inspector.Keyframer
 import dev.keyframer.inspector.kfTrack
 import kotlin.math.PI
 import kotlin.math.sin
 
-/** An entrance (the title), a loop (the pulse), a drag (the card) and a way to a second screen. */
+/**
+ * An entrance (the title), a loop (the pulse), a drag (the card, lifted while held: its translationZ
+ * animates, a render hint) and the way to a second screen and to the Compose screen. The loop pauses
+ * while another screen covers this one, as the inspector's "unseen" problem advises: frames nobody
+ * sees are frames spent for nothing.
+ */
 class MainActivity : Activity() {
     private lateinit var card: View
+    private var pulse: ValueAnimator? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,10 +58,12 @@ class MainActivity : Activity() {
         }
         root.addView(card, FrameLayout.LayoutParams(dpi(180), dpi(110), Gravity.CENTER))
 
-        root.addView(
-            button("Open detail") { startActivity(Intent(this, DetailActivity::class.java)) },
-            FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dpi(56) },
-        )
+        val buttons = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(button("Open detail") { startActivity(Intent(this@MainActivity, DetailActivity::class.java)) })
+            addView(button("Open Compose") { startActivity(Intent(this@MainActivity, ComposeActivity::class.java)) })
+        }
+        root.addView(buttons, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dpi(56) })
 
         // Entrance: two properties on one animator.
         ObjectAnimator.ofPropertyValuesHolder(
@@ -67,8 +76,9 @@ class MainActivity : Activity() {
             interpolator = DecelerateInterpolator(2f)
         }.kfTrack("title").start()
 
-        // Loop: a plain ValueAnimator driving the view from its update listener.
-        ValueAnimator.ofFloat(1f, 1.3f).apply {
+        // Loop: a plain ValueAnimator driving the view from its update listener. Passing the view lets the
+        // panel see it go out of sight (another screen covering it, in which case it pauses: onStop).
+        this.pulse = ValueAnimator.ofFloat(1f, 1.3f).apply {
             duration = 700
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.REVERSE
@@ -77,7 +87,7 @@ class MainActivity : Activity() {
                 pulse.scaleX = s
                 pulse.scaleY = s
             }
-        }.kfTrack("pulse").start()
+        }.kfTrack("pulse", pulse).also { it.start() }
 
         // Drag: the offsets are signals, so a recorded drag plays back.
         Keyframer.signal("cardX", read = { card.translationX }, write = { card.translationX = it })
@@ -85,15 +95,31 @@ class MainActivity : Activity() {
         setUpDrag()
     }
 
+    override fun onStart() {
+        super.onStart()
+        pulse?.resume()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        pulse?.pause()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun setUpDrag() {
         var downX = 0f
         var downY = 0f
         var snap: ObjectAnimator? = null
+        var lift: ObjectAnimator? = null
+        fun lift(z: Float) {
+            lift?.cancel()
+            lift = ObjectAnimator.ofFloat(card, View.TRANSLATION_Z, z).setDuration(180).kfTrack("lift").also { it.start() }
+        }
         card.setOnTouchListener { v, ev ->
             when (ev.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     snap?.cancel()
+                    lift(dp(12f))
                     downX = ev.rawX - v.translationX
                     downY = ev.rawY - v.translationY
                 }
@@ -102,6 +128,7 @@ class MainActivity : Activity() {
                     v.translationY = ev.rawY - downY
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    lift(0f)
                     snap = ObjectAnimator.ofPropertyValuesHolder(
                         v,
                         PropertyValuesHolder.ofFloat(View.TRANSLATION_X, 0f),

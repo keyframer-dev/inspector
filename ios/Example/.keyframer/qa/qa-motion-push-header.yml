@@ -1,0 +1,23 @@
+# QA regression check, bugs 2 and 4: viewDidAppear sets header.alpha = 0, then UIView.animate(0.45 s,
+# delay 0.1 s) fades it in and slides it. Expect one 450 ms fade, and no two-writers (alpha and
+# transform in one block). Today: duration 583-600 ms (the instant 1 -> 0 set is folded into the
+# motion) and "Two animations write header at once" -> FAILS until fixed.
+# Steps (agent-device) rather than the `push` scenario: ci resets the app once per check, not per
+# run, so the scenario finds no Push button from its second run on (new bug: reset per run).
+name: qa motion push header
+flow:
+  steps:
+    - open: dev.keyframer.inspector.example
+    - wait: { id: push }
+      timeout: 15s
+    - tap: push
+    - wait: 1800ms
+    - back
+    - wait: 800ms
+record: { speed: 1, settle: 800ms }
+expect:
+  - value: header.opacity
+    duration: 400ms..520ms
+  - value: dot.position.x
+    duration: 1100ms..1300ms
+  - none: [two-writers]

@@ -47,22 +47,3 @@ public struct SampleCompressor: Sendable {
         return out.sorted { $0.t < $1.t }
     }
 }
-
-/// A layer's local time as a function of media time, measured before the layer is frozen: what lets
-/// a frozen layer (speed 0) be seeked with `timeOffset` to any moment of the app's own timeline.
-public struct LayerClock: Hashable, Sendable {
-    public var local0: Double
-    public var media0: Double
-    /// Local seconds per media second (the product of speeds up the layer tree; 1 almost always).
-    public var rate: Double
-
-    public init(local0: Double, media0: Double, rate: Double) {
-        self.local0 = local0
-        self.media0 = media0
-        self.rate = rate
-    }
-
-    public func local(atMedia m: Double) -> Double {
-        local0 + (m - media0) * rate
-    }
-}

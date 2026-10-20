@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -8,9 +9,14 @@ import 'package:flutter/widgets.dart';
 
 import 'client.dart';
 import 'protocol.dart';
+import 'runtime.dart';
+import 'scene.dart';
+import 'time_control.dart';
+import 'widget_site.dart';
 
-/// The Flutter side of the client: frames, raster timings, pointers and screenshots.
-class FlutterKfHost implements KfHost {
+/// The Flutter side of the client: frames, raster timings, pointers and screenshots, the display and
+/// motion settings, the animation clock, and the widget tree while recording.
+class FlutterKfHost implements KfHost, KfDeviceHost, KfTimeHost, KfSceneHost {
   FlutterKfHost({this.boundary});
 
   /// The RepaintBoundary around the app (KeyframerInspector puts it there): what capture snapshots.
@@ -38,6 +44,69 @@ class FlutterKfHost implements KfHost {
 
   @override
   bool get canCapture => boundary != null;
+
+  // ── Display, motion settings, lifecycle ───────────────────────────────
+  /// The view's display rate, rounded (59.94 Hz is 60). Adaptive where the platform varies it with the
+  /// content: ProMotion on iOS and Macs, variable refresh on Android, whatever the browser does.
+  @override
+  KfDisplay? get display {
+    final hz = refreshRate;
+    final varies =
+        kIsWeb ||
+        (hz > 61 &&
+            (defaultTargetPlatform == TargetPlatform.iOS ||
+                defaultTargetPlatform == TargetPlatform.android ||
+                defaultTargetPlatform == TargetPlatform.macOS));
+    return KfDisplay(hz.round(), adaptive: varies);
+  }
+
+  /// Flutter's `disableAnimations` (Android's Remove animations, iOS's Reduce Motion where the engine
+  /// maps it there) or the platform's own Reduce Motion.
+  @override
+  KfAccessibility? get accessibility {
+    try {
+      final f = WidgetsBinding.instance.platformDispatcher.accessibilityFeatures;
+      return KfAccessibility(reduceMotion: f.disableAnimations || f.reduceMotion);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  String? get appState => switch (WidgetsBinding.instance.lifecycleState) {
+    AppLifecycleState.resumed => 'active',
+    AppLifecycleState.inactive => 'inactive',
+    AppLifecycleState.hidden || AppLifecycleState.paused || AppLifecycleState.detached => 'background',
+    null => null,
+  };
+
+  @override
+  void Function() watchDevice(void Function() onChange) {
+    final observer = _DeviceObserver(onChange);
+    WidgetsBinding.instance.addObserver(observer);
+    return () => WidgetsBinding.instance.removeObserver(observer);
+  }
+
+  // ── The animation clock ───────────────────────────────────────────────
+  @override
+  double setTimeScale(double scale) => KfClock.instance.setScale(scale, hz: refreshRate);
+
+  @override
+  void stepFrames(int frames) => KfClock.instance.step(frames);
+
+  // ── The widget tree while recording ───────────────────────────────────
+  @override
+  bool get widgetSites => kfWidgetCreationTracked;
+
+  @override
+  void Function() watchScene(
+    KfRuntime runtime, {
+    required void Function(String id, bool visible, String? reason) onVisibility,
+    required void Function(KfRenderHint hint) onHint,
+  }) {
+    final scene = KfScene(runtime, onVisibility: onVisibility, onHint: onHint)..start();
+    return scene.stop;
+  }
 
   /// A frame callback that reschedules itself, as React Native's meter does with requestAnimationFrame:
   /// frames keep coming while recording, so a gap between two of them is a frame the UI thread missed.
@@ -113,4 +182,21 @@ class FlutterKfHost implements KfHost {
       image.dispose();
     }
   }
+}
+
+/// Tells the client when the display, the motion settings or the lifecycle may have changed (a display
+/// change arrives as a metrics change).
+class _DeviceObserver with WidgetsBindingObserver {
+  _DeviceObserver(this.onChange);
+
+  final void Function() onChange;
+
+  @override
+  void didChangeMetrics() => onChange();
+
+  @override
+  void didChangeAccessibilityFeatures() => onChange();
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) => onChange();
 }

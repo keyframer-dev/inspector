@@ -6,6 +6,9 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.Activity
+import android.os.Build
+import android.view.View
+import android.view.Window
 import dev.keyframer.inspector.core.CallSite
 import dev.keyframer.inspector.core.CallSites
 import dev.keyframer.inspector.core.InspectorSession
@@ -25,39 +28,79 @@ import java.lang.ref.WeakReference
  *   clone of the animator, which shares the app's update listeners (and an ObjectAnimator's target), so
  *   the views follow while the original stays paused and untouched. Release resumes the original, or
  *   puts the views back where it left them.
+ *
+ * The view an animator moves (an ObjectAnimator's target, or the one passed to kfTrack) is watched for
+ * visibility while recording and checked for render hints on each start.
  */
 internal class AnimatorTracker(private val session: () -> InspectorSession?) {
     private val tracked = LinkedHashMap<String, Tracked>()
     private var overrides: Map<String, Map<String, Double>> = emptyMap()
 
-    fun track(animator: Animator, name: String?, owner: Activity?, stack: Array<StackTraceElement>, extraPrefixes: List<String>) {
+    /** The window on top, for render hints about blurs above an animated view. */
+    var topWindow: () -> Window? = { null }
+
+    fun track(animator: Animator, name: String?, owner: Activity?, stack: Array<StackTraceElement>, extraPrefixes: List<String>, view: View? = null) {
         val frame = CallSites.firstAppFrame(stack, extraPrefixes) ?: return
         val located = CallSites.site(frame)
+        // The name is part of the id: one line that tracks "row1" to "row50" in a loop tracks fifty
+        // animators, each with ids of its own that stay the same from run to run.
+        val slot = name?.let { "${located.id}:$it" } ?: located.id
         when (animator) {
-            is ValueAnimator -> register(animator, located, located.id, name, owner, stack)
+            is ValueAnimator -> register(animator, located, slot, name, owner, stack, null, view)
             is AnimatorSet -> animator.childAnimations.forEachIndexed { i, child ->
                 // A set's children share its call site; on API 26+ the set drives them, so seeking a child
                 // shows that child only. Good enough to see each part; a set-level time track is a next step.
-                if (child is ValueAnimator) register(child, located, "${located.id}/$i", name?.let { "$it[$i]" }, owner, stack)
+                if (child is ValueAnimator) register(child, located, "$slot/$i", name?.let { "$it[$i]" }, owner, stack, animator, view)
             }
         }
     }
 
-    private fun register(animator: ValueAnimator, at: CallSites.Located, baseId: String, name: String?, owner: Activity?, stack: Array<StackTraceElement>) {
+    /** The ids of every tracked animator, for tests. */
+    val ids: Set<String> get() = tracked.keys.toSet()
+
+    /**
+     * The running animators the editor's `time` holds: an AnimatorSet as a whole where it drives its
+     * children (API 26+), each animator otherwise.
+     */
+    fun runningRoots(): List<Animator> {
+        val out = LinkedHashSet<Animator>()
+        for (t in tracked.values) {
+            val root: Animator = t.parent?.takeIf { Build.VERSION.SDK_INT >= 26 } ?: t.animator
+            if (root.isRunning) out.add(root)
+        }
+        return out.toList()
+    }
+
+    /** The views of tracked animators, for visibility markers while recording. */
+    fun visibilityTargets(): List<ViewTarget> = tracked.values.mapNotNull { it.viewTarget() }
+
+    private fun register(
+        animator: ValueAnimator,
+        at: CallSites.Located,
+        baseId: String,
+        name: String?,
+        owner: Activity?,
+        stack: Array<StackTraceElement>,
+        parent: AnimatorSet?,
+        view: View?,
+    ) {
         if (tracked.values.any { it.animator === animator }) return
-        // Two live animators from one line (rows of a list) get #2, #3; a finished one is replaced (a
-        // one-shot created on every tap, or a screen created again).
+        // Several animators from one line under one name (rows of a list) get #2, #3. One replaces an
+        // earlier one only when it is that one made again: the same view, after the earlier one ran its
+        // course (a one-shot created on every tap), or when the earlier one's screen is going away (a
+        // screen created again, whose old activity may still be finishing). Animators made in a loop and
+        // started later have not run yet, so each keeps its own id.
         var id = baseId
         var n = 1
         while (true) {
             val existing = tracked[id] ?: break
-            if (!existing.animator.isRunning || existing.owner.get()?.isDestroyed != false) {
+            if (existing.replaceableBy(animator, view)) {
                 existing.dispose()
                 break
             }
             id = "$baseId#${++n}"
         }
-        val t = Tracked(animator, at, id, name, WeakReference(owner), stack)
+        val t = Tracked(animator, at, id, name, WeakReference(owner), stack, parent, view)
         tracked[id] = t
         overrides[at.id]?.let { t.apply(it) }
         t.attach()
@@ -99,11 +142,44 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
         val name: String?,
         val owner: WeakReference<Activity>,
         val registeredFrom: Array<StackTraceElement>,
+        /** The AnimatorSet it was tracked through, which drives it on API 26+. */
+        val parent: AnimatorSet?,
+        explicitView: View?,
     ) {
         val ownedByActivity = owner.get() != null
+        /** It started at least once (a one-shot made again replaces only one that has run). */
+        private var ran = false
         private var lastPlayTime = 0L
         private var pending: Map<String, Double>? = null
         private val signalIds = ArrayList<String>()
+        /** Property → its value signal id ("" for an animator of one value). */
+        private val valueIds = LinkedHashMap<String, String>()
+        private val explicitView = explicitView?.let { WeakReference(it) }
+        /** Set on each start: render hints are read on the first frame that follows. */
+        private var checkHints = false
+        private val hintsSent = HashSet<String>()
+
+        /** The view it animates: the one passed to kfTrack, else an ObjectAnimator's target. */
+        val view: View?
+            get() = explicitView?.get() ?: (animator as? ObjectAnimator)?.target as? View
+
+        /** What it moves: the view passed to kfTrack, or an ObjectAnimator's target (a view or not). */
+        private val target: Any?
+            get() = explicitView?.get() ?: (animator as? ObjectAnimator)?.target
+
+        /** See register: `next`, from the same line under the same name, is this animator made again. */
+        fun replaceableBy(next: ValueAnimator, nextView: View?): Boolean {
+            val screenGone = ownedByActivity && owner.get().let { it == null || it.isDestroyed || it.isFinishing }
+            if (screenGone) return true
+            val nextTarget: Any? = nextView ?: (next as? ObjectAnimator)?.target
+            return ran && !animator.isStarted && target === nextTarget
+        }
+
+        fun viewTarget(): ViewTarget? {
+            val v = view ?: return null
+            if (valueIds.isEmpty()) return null
+            return ViewTarget(valueIds.values.toList(), v, active = animator.isRunning, animatesAlpha = "alpha" in valueIds.keys)
+        }
 
         private val fn = when (animator) {
             is ObjectAnimator -> "ObjectAnimator"
@@ -113,7 +189,13 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
         private val properties: List<String>
             get() = animator.values?.map { it.propertyName.orEmpty() } ?: listOf("")
 
-        private val updates = ValueAnimator.AnimatorUpdateListener { a -> lastPlayTime = a.currentPlayTime }
+        private val updates = ValueAnimator.AnimatorUpdateListener { a ->
+            lastPlayTime = a.currentPlayTime
+            if (checkHints) {
+                checkHints = false
+                renderHints()
+            }
+        }
 
         private val lifecycle = object : AnimatorListenerAdapter() {
             override fun onAnimationStart(animation: Animator) {
@@ -121,6 +203,8 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
                 val now = Throwable().stackTrace
                 val stack = if (CallSites.firstAppFrame(now) != null) now else registeredFrom
                 session()?.reportAnim(callSite(), listOf(args()), stack, durationMs())
+                ran = true
+                checkHints = true
             }
 
             override fun onAnimationEnd(animation: Animator) {
@@ -139,11 +223,26 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
             val props = properties
             val label = name ?: (animator as? ObjectAnimator)?.propertyName ?: props.firstOrNull()?.ifEmpty { null }
             if (props.size <= 1) {
-                add(s, ValueSignal(id, label, null))
+                add(s, ValueSignal(id, label, null, props.firstOrNull()?.ifEmpty { null }))
+                valueIds[props.firstOrNull().orEmpty()] = id
             } else {
-                for (p in props) add(s, ValueSignal("$id:$p", listOfNotNull(name, p).joinToString("."), p))
+                for (p in props) {
+                    add(s, ValueSignal("$id:$p", listOfNotNull(name, p).joinToString("."), p, p.ifEmpty { null }))
+                    valueIds[p] = "$id:$p"
+                }
             }
             add(s, TimeSignal("$id:time", listOfNotNull(label, "time").joinToString(" ")))
+        }
+
+        /** Once per hint and value signal: a view that keeps animating the same way says it once. */
+        private fun renderHints() {
+            val v = view ?: return
+            val s = session() ?: return
+            val found = runCatching { RenderHints.check(v, valueIds.keys, topWindow()) }.getOrDefault(emptyList())
+            for (f in found) {
+                val sid = f.property?.let { valueIds[it] } ?: valueIds.values.firstOrNull() ?: id
+                if (hintsSent.add("$sid:${f.hint}")) s.reportRenderHint(sid, f.hint, f.detail)
+            }
         }
 
         private fun add(s: InspectorSession, signal: Signal) {
@@ -229,17 +328,18 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
             }
         }
 
-        private fun site(sid: String, label: String?, writable: Boolean? = null) =
-            SignalSite(sid, at.file, at.line, at.component, label, column = 0, writable = writable)
+        private fun site(sid: String, label: String?, writable: Boolean? = null, prop: String? = null, kind: String? = null) =
+            SignalSite(sid, at.file, at.line, at.component, label, column = 0, writable = writable, kind = kind, prop = prop)
 
-        /** Read-only: playback replays an animator through its `:time` track. */
-        inner class ValueSignal(sid: String, label: String?, private val property: String?) : Signal {
-            override val site = site(sid, label, writable = false)
+        /** Read-only: playback replays an animator through its `:time` track. `prop`: the property's name. */
+        inner class ValueSignal(sid: String, label: String?, private val property: String?, prop: String?) : Signal {
+            override val site = site(sid, label, writable = false, prop = prop)
             override fun read() = read(property)
         }
 
+        /** The play time, `kind: "time"`: what playback writes to replay the animator; not a value on screen. */
         inner class TimeSignal(sid: String, label: String) : Signal {
-            override val site = site(sid, label)
+            override val site = site(sid, label, kind = "time")
             private var scrub: ValueAnimator? = null
             private var resume = false
 

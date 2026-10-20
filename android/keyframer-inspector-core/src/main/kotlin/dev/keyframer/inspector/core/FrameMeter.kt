@@ -6,11 +6,14 @@ import kotlin.math.roundToLong
 
 /**
  * Counts one thread's frames while a recording runs: its frame rate per window and every long frame.
- * A port of react-native/src/frameMeter.ts. The refresh interval is what most frames of the last
- * window took, snapped to 60/90/120 Hz, so a jittery loop does not read as a faster display.
+ * A port of react-native/src/frameMeter.ts. Without a known display rate, the refresh interval is
+ * what most frames of the last window took, snapped to 60/90/120 Hz, so a jittery loop does not read as
+ * a faster display. With one ([setRefreshRate]), frames are counted against it: a run of slow frames on
+ * a 120 Hz display is a run of drops, not a 60 Hz display.
  */
 class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
     private var interval = 1000.0 / 60
+    private var fixed = false
     private var last = -1.0
     private var windowStart = -1.0
     private var frames = 0
@@ -25,6 +28,16 @@ class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
     fun hintRefreshRate(hz: Float) {
         if (hz in 30f..240f) interval = 1000.0 / hz
     }
+
+    /** The display's rate, known and current: frames are counted against it until it changes again. */
+    fun setRefreshRate(hz: Double) {
+        if (hz !in 1.0..1000.0) return
+        interval = 1000.0 / hz
+        fixed = true
+    }
+
+    /** The frame budget drops are counted against, in ms. */
+    val frameMs: Double get() = interval
 
     /** A frame was drawn at `t` ms (the recording's clock). */
     fun tick(t: Double) {
@@ -47,7 +60,7 @@ class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
         if (span >= windowMs) {
             stats.add(FrameStat(t.roundToLong(), thread, (frames * 1000 / span).roundToInt(), dropped))
             val n = frames
-            interval = if (fast * 2 > n) 1000.0 / 120 else if ((fast + mid) * 2 > n) 1000.0 / 90 else 1000.0 / 60
+            if (!fixed) interval = if (fast * 2 > n) 1000.0 / 120 else if ((fast + mid) * 2 > n) 1000.0 / 90 else 1000.0 / 60
             frames = 0
             dropped = 0
             fast = 0

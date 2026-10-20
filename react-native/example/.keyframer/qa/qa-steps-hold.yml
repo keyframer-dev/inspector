@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=../../../schema/check.schema.json
+# QA: two long presses from outside. Hold to delete for 1.4 s: fill (app/hold.tsx:52) is
+# withTiming(1, { duration: 900 }), then gone (app/hold.tsx:53) withTiming(1, { duration: 260 }), then the
+# row remounts as it was. (duration runs to within 0.1% of the end: about a frame short of 900 ms
+# for an inOut timing.) Then Photo 1 held 4.5 s: lift is withSpring(1, { damping: 14, stiffness: 180 })
+# with Reanimated 4's mass 4 (zeta 0.26: about 43% overshoot, within 2% after about 2.2 s), then
+# withTiming(0, { duration: 220 }) on release. Values are named by id: "fill" is also the motion
+# checks screen's, and each tile has its own lift (Photo 1's is the first).
+name: qa steps hold
+flow:
+  steps:
+    - open: "Expo Go"
+      url: exp://127.0.0.1:8082/--/hold
+    - wait: { id: hold-delete }
+      timeout: 15s
+    - longpress: hold-delete
+      ms: 1400
+    - wait: 600ms
+    - longpress: { text: "Photo 1" }
+      ms: 4500
+    - wait: 600ms
+record:
+  settle: 600ms
+expect:
+  - value: app/hold.tsx:52:15
+    duration: 860ms..930ms
+    settle: 790ms..835ms
+  - value: app/hold.tsx:53:15
+    duration: 250ms..285ms
+    settle: 220ms..250ms
+  - value: lift
+    overshoot: 38%..48%
+    settle: 1.9s..2.5s
+  - none: [reduce-motion, unseen, two-writers, jump, error]

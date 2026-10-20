@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The build id the dev.keyframer.vitals Gradle plugin injects is read by name: keep it through resource shrinking. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@string/keyframer_vitals_build_id" />

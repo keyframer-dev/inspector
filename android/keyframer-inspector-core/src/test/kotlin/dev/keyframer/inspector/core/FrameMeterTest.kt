@@ -40,4 +40,28 @@ class FrameMeterTest {
         m.tick(t + 1000.0 / 120)
         assertEquals(1, m.drops.single().dropped)
     }
+
+    @Test
+    fun `a known display rate is what frames are counted against, slow windows or not`() {
+        val m = FrameMeter("js")
+        m.setRefreshRate(120.0)
+        var t = 0.0
+        // A whole window of 16.7 ms frames: on a 120 Hz display every one skipped a frame. Guessing
+        // from the frames would call it a 60 Hz display with no drops.
+        repeat(40) {
+            m.tick(t)
+            t += 1000.0 / 60
+        }
+        assertEquals(39, m.drops.size)
+        assertTrue(m.drops.all { it.dropped == 1 })
+        assertEquals(1000.0 / 120, m.frameMs)
+        // A display marker moves it.
+        m.setRefreshRate(60.0)
+        m.drops.clear()
+        repeat(10) {
+            m.tick(t)
+            t += 1000.0 / 60
+        }
+        assertTrue(m.drops.isEmpty())
+    }
 }
