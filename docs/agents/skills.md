@@ -19,6 +19,17 @@ The npm package ships five agent skills: folders with a `SKILL.md` file in the A
 
 They live in the package at `node_modules/@keyframerdev/inspector/skills/`. They need the [MCP server](mcp-server.md) connected to do anything beyond setup.
 
+## The plugin
+
+In Claude Code and Cursor, the plugin installs all five skills together with the MCP server, and updates them with the package. No copying:
+
+```text
+/plugin marketplace add keyframer-dev/inspector
+/plugin install keyframer-inspector@keyframer
+```
+
+In Cursor, install Keyframer Inspector from the Cursor Marketplace. The sections below copy the skills by hand instead, for Codex or a project that pins its own copies.
+
 ## Claude Code
 
 Copy them into the project's `.claude/skills/` (or `~/.claude/skills/` for every project):

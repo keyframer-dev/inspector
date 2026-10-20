@@ -108,6 +108,6 @@ export async function waitForTestId(testID: string, opts: { prop?: string | null
   const end = Date.now() + (opts.timeoutMs ?? 4000)
   while (!findByTestId(testID, opts.prop === undefined ? 'onPress' : opts.prop)) {
     if (Date.now() > end) throw new Error(`"${testID}" did not appear within ${opts.timeoutMs ?? 4000} ms`)
-    await new Promise((r) => setTimeout(r, 50))
+    await new Promise<void>((r) => setTimeout(r, 50))
   }
 }

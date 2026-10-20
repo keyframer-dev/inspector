@@ -1,0 +1,29 @@
+{
+  "name": "keyframer-inspector",
+  "displayName": "Keyframer Inspector",
+  "description": "Give your coding agent eyes for motion. The Keyframer Inspector MCP server lets it record a running iOS, Android, React Native or Flutter app, slow it down to 0.1x and step frames, read the motion problems ranked by frames lost with a fix for your framework, compare before and after, and hold animations in CI with check files. Includes the setup, motion-debugging, fix, CI and Motion Vitals skills.",
+  "author": {
+    "name": "Keyframer",
+    "url": "https://keyframer.dev"
+  },
+  "homepage": "https://keyframer.dev/inspector",
+  "repository": "https://github.com/keyframer-dev/inspector",
+  "license": "MIT",
+  "keywords": [
+    "animation",
+    "motion",
+    "jank",
+    "react-native",
+    "flutter",
+    "ios",
+    "android",
+    "reanimated",
+    "mcp",
+    "performance"
+  ],
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://keyframer.dev/inspector/docs/agents/mcp-server",
+  "supportUrl": "https://github.com/keyframer-dev/inspector/issues",
+  "privacyPolicyUrl": "https://keyframer.dev/privacy",
+  "termsOfServiceUrl": "https://keyframer.dev/terms"
+}

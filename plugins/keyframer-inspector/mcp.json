@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "keyframer-inspector": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@keyframerdev/inspector",
+        "mcp"
+      ]
+    }
+  }
+}

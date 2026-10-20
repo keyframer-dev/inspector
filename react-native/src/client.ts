@@ -713,7 +713,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       if (showOverlays) clearTimeout(showOverlays)
       setCapturing(true)
       // The screen this moment was on: navigate there and let the transition finish first.
-      if (msg.route && navigateTo(msg.route.route, msg.route.params)) await new Promise((r) => setTimeout(r, 700))
+      if (msg.route && navigateTo(msg.route.route, msg.route.params)) await new Promise<void>((r) => setTimeout(r, 700))
       for (const s of msg.samples ?? []) {
         const sv = inspector.signals.get(s.id)
         if (sv) sv.value = s.v

@@ -11,6 +11,19 @@ A coding agent gets the same inspector through MCP: it records, runs scenarios, 
 
 ## Connect it
 
+### As a plugin (Claude Code, Cursor)
+
+The plugin is the MCP server and the five [agent skills](skills.md) in one install, and it stays current on its own:
+
+```text
+/plugin marketplace add keyframer-dev/inspector
+/plugin install keyframer-inspector@keyframer
+```
+
+In Cursor, install Keyframer Inspector from the Cursor Marketplace, or add the server alone with this link: [Add to Cursor](cursor://anysphere.cursor-deeplink/mcp/install?name=keyframer-inspector&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkBrZXlmcmFtZXJkZXYvaW5zcGVjdG9yIiwibWNwIl19).
+
+The plugin runs the server with `npx -y @keyframerdev/inspector mcp` (Node 20.10 or later), so it uses the project's own copy when the package is installed there.
+
 ### With the desktop app
 
 For React Native, Flutter, iOS and Android apps alike. Turn the server on in Settings, MCP Server (or from the menu bar), then:
@@ -27,7 +40,7 @@ Settings shows the same for Cursor, VS Code, Codex, Windsurf and Zed. Clients th
 
 ### Without it
 
-The command in the npm package. For React Native on Metro, it finds the Metro the app is on (8081 to 8090) by itself:
+The command in the npm package (Node 20.10 or later). For React Native on Metro, it finds the Metro the app is on (8081 to 8090) by itself. These use the project's installed copy; outside a project with the package, run `npx -y @keyframerdev/inspector mcp` instead:
 
 ```sh
 claude mcp add keyframer-inspector -- npx keyframer-inspect mcp

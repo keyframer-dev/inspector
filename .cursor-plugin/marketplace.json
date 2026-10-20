@@ -1,0 +1,14 @@
+{
+  "name": "keyframer",
+  "description": "Keyframer's plugins: give your agent eyes for motion.",
+  "owner": {
+    "name": "Keyframer"
+  },
+  "plugins": [
+    {
+      "name": "keyframer-inspector",
+      "source": "plugins/keyframer-inspector",
+      "description": "Give your agent eyes for motion: record, slow down and test animations in mobile apps"
+    }
+  ]
+}
