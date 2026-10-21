@@ -61,7 +61,7 @@ Reference, from `schema/check.schema.json`:
 - Targets: a testID string, `{ id }`, `{ text }` (a label, else a value: an empty field's placeholder), or `{ x, y }`.
 - Value or site expectations: `settle`, `overshoot`, `duration`, `velocity`, `tolerance`.
 - `frames`: `dropped` (both threads), `ui`, `js`, `longest`. iOS and Android do not measure `ui`.
-- `none`: `js-task`, `render-storm`, `slow-render`, `ui-work`, `busy-start`, `burst`, `layout-anim`, `js-unknown`, `screen-mount`, `ui-unknown`, `error`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump`, `render-hint`.
+- `none`: `js-task`, `render-storm`, `slow-render`, `ui-work`, `busy-start`, `burst`, `layout-anim`, `js-unknown`, `screen-mount`, `ui-unknown`, `error`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump`, `render-hint`, `gesture-lost`, `gesture-cancelled`, `gesture-steals-scroll`.
 - Limits: `< X`, `> X` (ends included), `X..Y`, or a bare `X` (at most). Times `400ms` or `0.4s`; percents `5%` or `0.05`; velocity `3000/s`; frames whole numbers.
 
 Rules that make checks reliable:

@@ -11,6 +11,22 @@ The npm package `@keyframerdev/inspector` has a development-only Babel plugin th
 
 You need Reanimated 4 with `react-native-worklets`, and Node 22 or later for the `keyframer-inspect` command. It works in Expo Go: JavaScript only, no native module, no config plugin.
 
+## Set up with the wizard
+
+In your app's folder:
+
+```sh
+npx @keyframerdev/wizard
+```
+
+It installs the package, adds the Babel plugin, connects the app for the view you pick (Expo's dev tools, the desktop app or the Keyframer editor), tracks your navigation container, and waits for the app's first hello. Every change is shown as a diff before it is written, and running it again changes nothing. Agents and CI run it without questions:
+
+```sh
+npx @keyframerdev/wizard --yes --products inspector --view devtools
+```
+
+[@keyframerdev/wizard](wizard.md) has every step, option and message. The steps below are what it does, by hand.
+
 ## 1. Install
 
 ```sh

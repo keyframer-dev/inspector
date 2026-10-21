@@ -20,6 +20,20 @@ Native platforms (iOS, Android, Flutter) need the desktop app, Keyframer Inspect
 
 ## 2a. React Native and Expo
 
+First choice: the setup wizard, without questions. It installs the package, adds the Babel plugin, writes the connect code and the navigation ref, and changes nothing that is already in place:
+
+```sh
+npx @keyframerdev/wizard --yes --products inspector --view devtools --skip-verify --no-agents
+```
+
+- Run it from the app's folder (in a monorepo, the app's own folder, or `--root apps/mobile`). Show the person the changes first with `--dry-run` if they want to review them.
+- `--view devtools` needs an Expo app. For bare React Native use `--view desktop`, once the person has installed and opened the desktop app (step 1): the wizard does not install it on its own under `--yes`.
+- `--no-agents`: you are already connected through the MCP server. `--skip-verify`: check with `inspector_status` yourself after the app reloads (step 3), instead of the wizard's own wait.
+- Exit code 2 names a missing flag; add it and run again. If it prints a snippet to paste (a navigation container it could not place), paste it where it says.
+- If the package can't be found or the wizard fails, set it up by hand below.
+
+By hand:
+
 ```sh
 npm i -D @keyframerdev/inspector
 ```

@@ -63,6 +63,8 @@ Problems are ranked by frames attributable: the frames dropped above the screen'
 
 ## Set it up
 
+In a React Native or Expo app, `npx @keyframerdev/wizard --products vitals` does steps 1 and 2 for you, and waits for the first session: see [@keyframerdev/wizard](../getting-started/wizard.md).
+
 1. Create a project at [keyframer.dev/app/vitals](https://keyframer.dev/app/vitals), pick its platform and copy its field key (`kfp_live_…`). The key is public: it can only send reports to that project.
 2. Add the SDK: [React Native](react-native.md), [iOS](ios.md), [Android](android.md) or [Flutter](flutter.md).
 3. Decide when reporting starts: [Consent and privacy](consent.md), and fill in the [store privacy answers](store-privacy.md).

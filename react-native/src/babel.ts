@@ -27,6 +27,7 @@
 
 import type { NodePath, PluginObj, PluginPass, Visitor, types as BabelTypes } from '@babel/core'
 import type { InspectorCallSite, InspectorGestureSite, InspectorParam, InspectorSignalSite, InspectorStyleSite } from '../../protocol/inspector'
+import { analyzeWorklets, formatWorkletIssue, type WorkletLint } from './workletLint'
 
 export const ANIMATION_FNS = new Set([
   'withTiming',
@@ -52,6 +53,14 @@ const WORKLET_HOOKS: Record<string, string> = {
 const UI_RUNNERS = new Set(['scheduleOnUI', 'runOnUI'])
 const EFFECT_HOOKS = new Set(['useEffect', 'useLayoutEffect'])
 const GESTURE_HANDLER = 'react-native-gesture-handler'
+const SVG = 'react-native-svg'
+/** Image components whose onLoad says the source's size, by module: named exports, and `default` for a default export. */
+const IMAGE_MODULES: Record<string, string[]> = {
+  'react-native': ['Image', 'ImageBackground'],
+  'expo-image': ['Image', 'ImageBackground'],
+  'react-native-fast-image': ['default'],
+  '@d11/react-native-fast-image': ['default'],
+}
 /** Gesture callbacks whose events say where the finger is. */
 export const GESTURE_CALLBACKS = new Set([
   'onBegin',
@@ -73,7 +82,14 @@ export type InspectorPluginOptions = {
   /** Also instrument dependencies. Off by default: an app's own motion is what gets tuned, and a UI
    *  library's internal springs would only flood the timeline. */
   includeNodeModules?: boolean
+  /** Print one warning per worklet mistake it finds (workletLint.ts) to Metro's terminal. On by default. */
+  workletWarnings?: boolean
 }
+
+/** Findings already printed by this process (Metro's workers transform a file again when it changes). */
+const warned = new Set<string>()
+/** At most this many suspects per file go to the runtime (they only help place a crash). */
+const MAX_SUSPECTS = 60
 
 type State = PluginPass & {
   opts: InspectorPluginOptions
@@ -103,6 +119,10 @@ type State = PluginPass & {
   usesCss: boolean
   /** Local names of Reanimated's default or namespace import (`Animated`). */
   animatedLocals: Set<string>
+  /** Imports from react-native-svg: local name → the component ("Path"; "Svg" for the default; "*" for a namespace). */
+  svgLocals: Map<string, string>
+  /** Local names of image components (React Native's Image, expo-image, FastImage). */
+  imageLocals: Set<string>
   skip: boolean
 }
 
@@ -200,15 +220,50 @@ function isAnimatedElement(name: BabelTypes.JSXOpeningElement['name'], path: Nod
     while (obj.type === 'JSXMemberExpression') obj = obj.object
     return obj.type === 'JSXIdentifier' && state.animatedLocals.has(obj.name) && path.scope.getBinding(obj.name)?.kind === 'module'
   }
-  if (name.type !== 'JSXIdentifier') return false
+  return animatedComponentOf(name, path) !== null
+}
+
+/** What `<X>` animates when X is made here with createAnimatedComponent(…): its argument, else null. */
+function animatedComponentOf(name: BabelTypes.JSXOpeningElement['name'], path: NodePath): BabelTypes.Node | null {
+  if (name.type !== 'JSXIdentifier') return null
   const node = path.scope.getBinding(name.name)?.path.node
   const init = node?.type === 'VariableDeclarator' ? node.init : null
-  if (!init || init.type !== 'CallExpression') return false
+  if (!init || init.type !== 'CallExpression') return null
   const callee = init.callee
-  return (
+  const made =
     (callee.type === 'Identifier' && callee.name === 'createAnimatedComponent') ||
     (callee.type === 'MemberExpression' && !callee.computed && keyName(callee.property) === 'createAnimatedComponent')
-  )
+  return made ? (init.arguments[0] ?? null) : null
+}
+
+/** True when `name` at `path` is a module import among `locals`. */
+function isModuleLocal(name: string, locals: { has(name: string): boolean }, path: NodePath): boolean {
+  return locals.has(name) && path.scope.getBinding(name)?.kind === 'module'
+}
+
+/**
+ * The react-native-svg component an element animates: `<AnimatedPath>` with
+ * `const AnimatedPath = Animated.createAnimatedComponent(Path)` (or `Svg.Path` from a namespace
+ * import) → "Path". Null for anything else.
+ */
+function svgElementOf(name: BabelTypes.JSXOpeningElement['name'], path: NodePath, state: State): string | null {
+  const arg = animatedComponentOf(name, path)
+  if (arg?.type === 'Identifier' && isModuleLocal(arg.name, state.svgLocals, path)) {
+    const svg = state.svgLocals.get(arg.name)!
+    return svg === '*' ? null : svg
+  }
+  if (arg?.type === 'MemberExpression' && !arg.computed && arg.object.type === 'Identifier' && isModuleLocal(arg.object.name, state.svgLocals, path)) return keyName(arg.property)
+  return null
+}
+
+/** An image element whose onLoad says the source's size: React Native's Image, expo-image, FastImage, Animated.Image, or one of them made animated here. */
+function isImageElement(name: BabelTypes.JSXOpeningElement['name'], path: NodePath, state: State): boolean {
+  if (name.type === 'JSXIdentifier' && isModuleLocal(name.name, state.imageLocals, path)) return true
+  if (name.type === 'JSXMemberExpression') {
+    return name.object.type === 'JSXIdentifier' && name.property.name === 'Image' && isModuleLocal(name.object.name, state.animatedLocals, path)
+  }
+  const arg = animatedComponentOf(name, path)
+  return arg?.type === 'Identifier' && isModuleLocal(arg.name, state.imageLocals, path)
 }
 
 function jsxAttr(el: BabelTypes.JSXOpeningElement, name: string): BabelTypes.JSXAttribute | undefined {
@@ -218,6 +273,52 @@ function jsxAttr(el: BabelTypes.JSXOpeningElement, name: string): BabelTypes.JSX
 /** The expression in `name={…}`, or null. */
 function jsxValue(attr: BabelTypes.JSXAttribute | undefined): BabelTypes.Expression | null {
   return attr?.value?.type === 'JSXExpressionContainer' && attr.value.expression.type !== 'JSXEmptyExpression' ? attr.value.expression : null
+}
+
+/** The animated style (or props) an element's `style` / `animatedProps` attribute uses: its id and variable. */
+function animatedStyleIn(path: NodePath<BabelTypes.JSXOpeningElement>, attr: BabelTypes.JSXAttribute, state: State): { id: string; name: string } | null {
+  if (!state.styleBindings.size || attr.value?.type !== 'JSXExpressionContainer') return null
+  let found: { id: string; name: string } | null = null
+  path.get('attributes').forEach((ap) => {
+    if (ap.node !== attr || found) return
+    ap.traverse({
+      Identifier(id) {
+        if (found) return
+        const binding = id.scope.getBinding(id.node.name)
+        const sid = binding ? state.styleBindings.get(binding.identifier) : undefined
+        if (sid) found = { id: sid, name: binding!.identifier.name }
+      },
+    })
+  })
+  return found
+}
+
+const LAYOUT_ANIMATION_PROPS: Array<[string, string]> = [['entering', 'an entering'], ['exiting', 'an exiting'], ['layout', 'a layout']]
+
+/**
+ * The animated view an element is, or is inside, in this file: "a view animated by cardStyle" (an
+ * animated style or props), "a view with an entering animation". Null when nothing around it animates
+ * here (a parent in another component is out of sight).
+ */
+function animatedViewAround(path: NodePath<BabelTypes.JSXOpeningElement>, state: State): string | null {
+  const viewOf = (el: NodePath<BabelTypes.JSXOpeningElement>): string | null => {
+    for (const prop of ['style', 'animatedProps']) {
+      const attr = jsxAttr(el.node, prop)
+      const style = attr ? animatedStyleIn(el, attr, state) : null
+      if (style) return `a view animated by ${style.name}`
+    }
+    if (!isAnimatedElement(el.node.name, el, state)) return null
+    for (const [prop, what] of LAYOUT_ANIMATION_PROPS) if (jsxValue(jsxAttr(el.node, prop))) return `a view with ${what} animation`
+    return null
+  }
+  const own = viewOf(path)
+  if (own) return own
+  for (let p: NodePath | null = path.parentPath; p; p = p.parentPath) {
+    if (!p.isJSXElement() || p.node.openingElement === path.node) continue
+    const around = viewOf(p.get('openingElement') as NodePath<BabelTypes.JSXOpeningElement>)
+    if (around) return around
+  }
+  return null
 }
 
 /**
@@ -326,6 +427,15 @@ export function literalParams(args: BabelTypes.Node[]): InspectorParam[] {
   return params
 }
 
+/** The file's worklet mistakes; none when the analysis trips over code it does not expect (it never fails a build). */
+function lintFile(program: NodePath<BabelTypes.Program>, state: State): WorkletLint {
+  try {
+    return analyzeWorklets(program, { file: relativeFile(state), code: state.file.code ?? '' })
+  } catch {
+    return { issues: [], suspects: [] }
+  }
+}
+
 export default function keyframerInspector({ types: t }: { types: typeof BabelTypes }): PluginObj<State> {
   const literal = (value: unknown): BabelTypes.Expression => t.valueToNode(value) as BabelTypes.Expression
 
@@ -352,6 +462,7 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
   }
 
   const timed = new WeakSet<BabelTypes.Node>()
+  const imagesDone = new WeakSet<BabelTypes.Node>()
   /**
    * Times an inline worklet on the UI thread: its body runs between two clock reads and reports how
    * long it took (`__kfWork`, a no-op unless a recording listens). Stays a worklet.
@@ -524,29 +635,43 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
             style.value = t.jsxExpressionContainer(t.callExpression(t.cloneNode(helper(state, path, '__kfCss')), [styleValue, site()]))
           }
         }
+        // An image in an animated view: its onLoad says how large the source is and its onLayout how
+        // large it is drawn, so the runtime can say when one is far larger than its view.
+        if (loc && state.imageLocals.size + state.animatedLocals.size > 0 && !imagesDone.has(path.node) && isImageElement(path.node.name, path, state)) {
+          imagesDone.add(path.node)
+          const inside = animatedViewAround(path, state)
+          if (inside) {
+            const id = `${relativeFile(state)}:${loc.start.line}:${loc.start.column + 1}`
+            for (const [prop, name] of [['onLoad', '__kfImageLoad'], ['onLayout', '__kfImageLayout']] as const) {
+              const attr = jsxAttr(path.node, prop)
+              const prev = jsxValue(attr)
+              const call = t.callExpression(t.cloneNode(helper(state, path, name)), [t.stringLiteral(id), t.stringLiteral(inside), ...(prev ? [prev] : [])])
+              if (attr) attr.value = t.jsxExpressionContainer(call)
+              else path.node.attributes.push(t.jsxAttribute(t.jsxIdentifier(prop), t.jsxExpressionContainer(call)))
+            }
+          }
+        }
         if (!state.styleBindings.size) return
         let styleId: string | null = null
         for (const attr of path.node.attributes) {
           if (attr.type !== 'JSXAttribute' || attr.name.type !== 'JSXIdentifier') continue
           if (attr.name.name !== 'style' && attr.name.name !== 'animatedProps') continue
-          if (attr.value?.type !== 'JSXExpressionContainer') continue
-          const found: string[] = []
-          path.get('attributes').forEach((ap) => {
-            if (ap.node !== attr) return
-            ap.traverse({
-              Identifier(id) {
-                const binding = id.scope.getBinding(id.node.name)
-                const sid = binding ? state.styleBindings.get(binding.identifier) : undefined
-                if (sid) found.push(sid)
-              },
-            })
-          })
-          if (found.length) {
-            styleId = found[0]!
+          const found = animatedStyleIn(path, attr, state)
+          if (found) {
+            styleId = found.id
             break
           }
         }
         if (!styleId) return
+        // Animated props on a react-native-svg element: the whole SVG is drawn again every frame they
+        // change. The runtime turns it into a render hint once; the same props go through.
+        const animatedProps = jsxAttr(path.node, 'animatedProps')
+        const propsValue = jsxValue(animatedProps)
+        const svg = animatedProps && propsValue && !isHelperCall(propsValue, '__kfSvgProps') ? svgElementOf(path.node.name, path, state) : null
+        const propsStyle = svg ? animatedStyleIn(path, animatedProps!, state) : null
+        if (svg && propsStyle) {
+          animatedProps!.value = t.jsxExpressionContainer(t.callExpression(t.cloneNode(helper(state, path, '__kfSvgProps')), [propsValue!, t.stringLiteral(propsStyle.id), t.stringLiteral(svg)]))
+        }
         // Its static style is read once at runtime for what makes moving it costly (a shadow without a
         // path on iOS). The same object goes through.
         const viewStyle = jsxAttr(path.node, 'style')
@@ -737,6 +862,8 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           state.wrapped = new WeakSet()
           state.usesCss = /\b(animationName|transitionProperty|transitionDuration)\b/.test(state.file.code ?? '')
           state.animatedLocals = new Set()
+          state.svgLocals = new Map()
+          state.imageLocals = new Set()
           for (const stmt of program.node.body) {
             if (stmt.type === 'ImportDeclaration' && stmt.importKind !== 'type' && (stmt.source.value === 'react' || stmt.source.value === WORKLETS)) {
               for (const spec of stmt.specifiers) {
@@ -756,6 +883,15 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
                 if (imported === 'Gesture') state.gestureLocals.add(spec.local.name)
               }
             }
+            if (stmt.type === 'ImportDeclaration' && stmt.importKind !== 'type' && (stmt.source.value === SVG || stmt.source.value in IMAGE_MODULES)) {
+              const images = IMAGE_MODULES[stmt.source.value]
+              for (const spec of stmt.specifiers) {
+                if (spec.type === 'ImportSpecifier' && spec.importKind === 'type') continue
+                const imported = spec.type === 'ImportSpecifier' ? (spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value) : spec.type === 'ImportDefaultSpecifier' ? 'default' : '*'
+                if (stmt.source.value === SVG) state.svgLocals.set(spec.local.name, imported === 'default' ? 'Svg' : imported)
+                else if (images?.includes(imported)) state.imageLocals.add(spec.local.name)
+              }
+            }
             if (stmt.type !== 'ImportDeclaration' || stmt.source.value !== REANIMATED) continue
             if (stmt.importKind === 'type') continue
             for (const spec of stmt.specifiers) {
@@ -772,10 +908,29 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
             }
           }
           if (state.skip) return
+          // Worklet mistakes that crash the app on the UI thread, read from the code as written (before
+          // anything below rewrites it): printed once each in Metro's terminal, and reported to the
+          // inspector when the file loads, so the panel and agents list them before the app crashes.
+          const lint = lintFile(program, state)
+          ;(state.file.metadata as unknown as Record<string, unknown>).keyframerWorklets = lint.issues
+          if (state.opts.workletWarnings !== false) {
+            for (const issue of lint.issues) {
+              if (warned.has(issue.id)) continue
+              warned.add(issue.id)
+              console.warn(formatWorkletIssue(issue))
+            }
+          }
           // Everything in one pass, here, before the plugins after this one see the file:
           // react-native-worklets/plugin copies each worklet's code when it reaches it, so the calls in
           // a worklet must be wrapped, and the helpers they call imported, by then.
           program.traverse(nodes, state)
+          if (lint.issues.length || lint.suspects.length) {
+            const suspects = lint.suspects.slice(0, MAX_SUSPECTS).map(({ name, key, line, column, worklet }) => ({ name, key, line, column, worklet }))
+            program.unshiftContainer(
+              'body',
+              t.expressionStatement(t.callExpression(t.cloneNode(helper(state, program, '__kfWorkletIssues')), [t.stringLiteral(relativeFile(state)), literal(lint.issues), literal(suspects)])),
+            )
+          }
           finish(program, state)
           // The imports are new bindings: the worklets plugin looks them up to capture them.
           program.scope.crawl()

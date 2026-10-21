@@ -188,6 +188,14 @@ export type VitalsConfig = {
  */
 export type VitalsIngestResponse = { ok: boolean; config: VitalsConfig; error?: string }
 
+/**
+ * GET /v1/status/<field key>: when the key's project last received a session (its first report), and
+ * when it last dropped a development build's report because it does not keep them, within the last
+ * week; null when it has not. For setup tools that wait for an app's first session. 401 unknown or
+ * revoked key, 410 deleted project, 429 rate limited.
+ */
+export type VitalsKeyStatus = { lastSessionAt: string | null; developmentDroppedAt: string | null }
+
 // ---------- symbols ----------
 
 /** What a symbol upload is for. */

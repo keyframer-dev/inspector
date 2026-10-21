@@ -1,0 +1,38 @@
+{
+  "name": "@keyframerdev/wizard",
+  "version": "0.1.0",
+  "description": "Sets up the Keyframer Inspector and Motion Vitals in a React Native or Expo app, step by step, and waits for the first message to prove it works",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "keyframer-wizard": "./bin/keyframer-wizard.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "bun scripts/build.ts",
+    "wizard": "bun src/main.ts",
+    "terminal-svg": "bun scripts/terminal-svg.ts"
+  },
+  "devDependencies": {
+    "@babel/parser": "^7.29.2",
+    "@babel/types": "^7.29.0",
+    "@clack/prompts": "^1.8.1",
+    "@types/node": "^22.19.17",
+    "@types/ws": "^8.18.2",
+    "recast": "^0.24.0",
+    "typescript": "~6.0.3",
+    "vitest": "^3.0.5",
+    "ws": "^8.22.0"
+  }
+}

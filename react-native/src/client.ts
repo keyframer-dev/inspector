@@ -167,6 +167,11 @@ export type ConnectInspectorOptions = {
   reload?: (() => void) | null
   /** The longest the hello waits for what the bridges measure about the device (the display), ms. Default 1500. */
   factsTimeoutMs?: number
+  /**
+   * Where the one note goes when nothing has answered at `apiUrl` after a few tries (the desktop app is
+   * closed, or the app points at a port the relay does not listen on). Default console.warn; null for none.
+   */
+  warn?: ((line: string) => void) | null
 }
 
 /** `debug` when React Native's __DEV__ is on, `release` when it is off, unknown elsewhere. */
@@ -243,6 +248,30 @@ export type CaptureScreen = (options: { format: 'jpg' | 'png'; quality: number; 
 const OPEN = 1
 const MAX_QUEUED_EVENTS = 2000
 const MAX_BACKOFF_MS = 10_000
+/** Failed tries (0.5 + 1 + 2 s apart) before saying nothing answers. */
+const UNREACHABLE_TRIES = 3
+/** The port the desktop app's relay listens on unless its settings say another. */
+const RELAY_PORT = '8790'
+/** This machine or the local network: the desktop app's relay, not the Keyframer room. */
+const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|\[::1\]$)|\.local$/i
+
+/**
+ * What to say once when nothing answers at `apiUrl`: for a local address, whether the desktop app is
+ * open and on that port; for anything else, the network. Null for the dev tools channel, which says its
+ * own. Parsed by hand: React Native's URL has no hostname or port outside Expo.
+ */
+export function unreachableNote(apiUrl: string, platform?: string): string | null {
+  const m = /^([a-z]+):\/\/(\[[^\]]+\]|[^/:?#]+)(?::(\d+))?/i.exec(apiUrl.trim())
+  if (!m) return null
+  const [, scheme, host, port = /^(https|wss)$/i.test(scheme) ? '443' : '80'] = m
+  if (host === 'devtools') return null
+  const at = `${scheme}://${host}${m[3] ? `:${m[3]}` : ''}`
+  if (!LOCAL_HOST.test(host)) return `keyframer-inspector: cannot reach ${at}, still trying. Check the network and the API address.`
+  let note = `keyframer-inspector: nothing answers at ${at}, still trying. Is Keyframer Inspector (the desktop app) open?`
+  if (port !== RELAY_PORT) note += ` Its relay listens on ${RELAY_PORT} unless its settings name another port (its status bar shows the port), and this app points at ${port}.`
+  if (platform === 'android' && /^(localhost|127\.)/.test(host)) note += ` On an Android emulator, run adb reverse tcp:${port} tcp:${port} first.`
+  return note
+}
 
 let replayFn: (() => void) | null = null
 
@@ -328,6 +357,10 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         e = { ...e, t: Math.round(now() - recordStart) }
         valueMoved(e.id, e.t!)
       }
+    } else if (e.kind === 'workletIssue') {
+      // Kept for panels that connect later. A crash goes out now: the red box comes right after it.
+      catalog.set(`workletIssue:${e.id}`, e)
+      if (e.error) setTimeout(() => flush(), 0)
     } else {
       // As reported: a panel that connects later gets no recording time with it.
       catalog.set(e.kind === 'renderHint' ? `renderHint:${e.id}:${e.hint}` : `${e.kind}:${e.site.id}`, e)
@@ -873,6 +906,10 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   }
 
   let heartbeat: ReturnType<typeof setInterval> | null = null
+  const warn = opts.warn === undefined ? (line: string) => console.warn(line) : opts.warn
+  // Whether any socket has opened, and how many tries failed before one did.
+  let reached = false
+  let failures = 0
   const connect = () => {
     if (disposed) return
     const s = new Socket(url)
@@ -887,6 +924,11 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       normalSpeed()
       stopRecorders()
       if (disposed) return
+      // Never reached after a few tries: said once, so a closed desktop app or a wrong port is not silent.
+      if (!reached && ++failures === UNREACHABLE_TRIES) {
+        const note = unreachableNote(opts.apiUrl, opts.platform)
+        if (note) warn?.(note)
+      }
       reconnectTimer = setTimeout(connect, backoff)
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
     }
@@ -904,6 +946,8 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
     }
     s.onopen = () => {
       backoff = 500
+      if (!reached && failures >= UNREACHABLE_TRIES) warn?.(`keyframer-inspector: reached ${opts.apiUrl}`)
+      reached = true
       lastHeard = now()
       // The hello carries what the bridges measure about the device (the display's refresh rate takes
       // a moment of frames): it waits for them, and nothing else goes out before it.

@@ -74,3 +74,46 @@ offset.value = withSpring(target)
 // after: continues from where it is, with the finger's speed
 offset.value = withSpring(target, { velocity: e.velocityY })
 ```
+
+## Gesture conflicts
+
+React Native only: the Babel plugin wraps react-native-gesture-handler's callbacks (`Gesture.Pan().onBegin(…)` and the others written inline), and a list's offsets are recorded when it has an `onScroll` handler. Each gesture is read in attempts, from the finger coming down to `onFinalize`, and `onEnd` and `onFinalize` record whether it succeeded and whether it had activated. A gesture needs `onBegin` (or `onTouchesDown`) written for an attempt that never activates to be seen at all.
+
+### Lost gesture
+
+Kind: `gesture-lost`. A drag gesture began and never activated, twice or more, while the touch went elsewhere: the list under it scrolled while the finger went across the list's axis (a sideways drag in a vertical list), or another drag gesture activated on a drag along an axis this one takes at other times. A finger going along the list is the list's (scrolling over a swipeable row is not a conflict), and a tap or long press failing as a drag starts is how they work.
+
+- Give each its direction: `activeOffsetX([-10, 10])` and `failOffsetY([-5, 5])` on a sideways gesture in a vertical list (`activeOffsetY` and `failOffsetX` in a horizontal list or pager).
+- To move both at once, use the `ScrollView` or `FlatList` from react-native-gesture-handler and `simultaneousWithExternalGesture` with its `Gesture.Native()`. For the gesture to win, `blocksExternalGesture` on it: the list waits for it to fail.
+- Lost to another gesture: `simultaneousWithExternalGesture` to run both, `requireExternalGestureToFail` on the other (or `blocksExternalGesture` on this one) for this one to win.
+
+### Cancelled gesture
+
+Kind: `gesture-cancelled`. A gesture was active and ended without succeeding (`onFinalize`'s `success` was false) as another gesture activated within 50 ms: the other one cancelled it, and what it drives stops part way. An end that succeeded (the finger lifted) does not count, nor do recordings older than the `success` marker field.
+
+- `simultaneousWithExternalGesture` (or `Gesture.Simultaneous` on one view) if both should run; `requireExternalGestureToFail` on the other, or `blocksExternalGesture` on this one, if the other should wait; `activeOffsetX/Y` and `failOffsetX/Y` on the other keep it from activating on this one's drags.
+
+### Stolen scroll
+
+Kind: `gesture-steals-scroll`. A gesture took drags that belong to a list. Either the list was scrolling under the same finger when the gesture activated and then stood still for 150 ms or more while the finger kept moving (a stall), or a gesture that activates sideways at other times activated on drags along a list's axis, twice or more, while that list, which scrolls on the same screen, did not move. A list still coasting from an earlier fling when the finger lands is not a stall, and a list that keeps scrolling with the gesture (`simultaneousWithExternalGesture`) is fine.
+
+- Make it activate only in its own direction: `activeOffsetX([-10, 10])` and `failOffsetY([-5, 5])` on a sideways gesture in a vertical list (`activeOffsetY` and `failOffsetX` in a horizontal one).
+- Use the `ScrollView` or `FlatList` from react-native-gesture-handler, with `requireExternalGestureToFail` and its `Gesture.Native()` if the list should always win, or `simultaneousWithExternalGesture` if both may move.
+
+```tsx
+import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler'
+
+// The list, a ScrollView from react-native-gesture-handler: <ScrollView ref={list}>…</ScrollView>.
+// Each row, with the list's ref passed down: sideways drags swipe it, vertical ones scroll the list.
+const swipe = useMemo(
+  () =>
+    Gesture.Pan()
+      .activeOffsetX([-10, 10])
+      .failOffsetY([-5, 5])
+      .simultaneousWithExternalGesture(list)
+      .onUpdate((e) => {
+        offsetX.value = e.translationX
+      }),
+  [list],
+)
+```

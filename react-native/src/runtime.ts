@@ -16,9 +16,11 @@ import type {
   InspectorOverrides,
   InspectorSignalSite,
   InspectorStyleSite,
+  InspectorWorkletIssue,
 } from '../../protocol/inspector'
 import { useEffect } from 'react'
 import { isScrollSample } from './scrollIds'
+import { watchWorkletCrashes, type KnownSuspect } from './workletCrash'
 
 type AnimFn = (...args: unknown[]) => unknown
 
@@ -30,6 +32,8 @@ export type InspectorHook = {
   style(site: InspectorStyleSite): void
   /** Something about how an animated view is drawn that costs frames (see renderHints). */
   hint?(hint: InspectorRenderHint): void
+  /** A worklet mistake that crashes the app, found in the code or seen crashing (see __kfWorkletIssues). */
+  worklet?(issue: InspectorWorkletIssue): void
 }
 
 type HookGlobal = { __KF_INSPECTOR__?: InspectorHook; __KF_SEEN__?: Seen }
@@ -48,13 +52,18 @@ type Seen = {
   styles: Map<string, InspectorStyleSite>
   hints: Map<string, InspectorRenderHint>
   routes: Map<string, string>
+  /** Worklet mistakes the Babel plugin found, by id, and what each file's worklets call that it could not see into, by file. */
+  worklets: Map<string, InspectorWorkletIssue>
+  suspects: Map<string, KnownSuspect[]>
 }
 function seen(): Seen {
   const g = globalThis as HookGlobal
-  const s = (g.__KF_SEEN__ ??= { signals: new Map(), styles: new Map(), hints: new Map(), routes: new Map() })
+  const s = (g.__KF_SEEN__ ??= { signals: new Map(), styles: new Map(), hints: new Map(), routes: new Map(), worklets: new Map(), suspects: new Map() })
   // A copy of an older runtime may have made it without these.
   s.hints ??= new Map()
   s.routes ??= new Map()
+  s.worklets ??= new Map()
+  s.suspects ??= new Map()
   return s
 }
 
@@ -76,21 +85,21 @@ export function __kfAnim(fn: AnimFn, site: InspectorCallSite, ...args: unknown[]
 }
 
 /** What a gesture callback reports, when something listens (a recording on the device): see native.ts watchGestures. */
-type GestureHook = (site: InspectorGestureSite, event: unknown) => void
+type GestureHook = (site: InspectorGestureSite, event: unknown, success: unknown) => void
 type GestureGlobal = { __KF_GESTURE__?: GestureHook }
 
 /**
  * A react-native-gesture-handler callback, wrapped by the Babel plugin: it tells a listener which
- * gesture ran and where the finger was, then runs the original. A worklet, so it runs wherever the
- * gesture runs its callbacks (the UI thread, or JS with runOnJS(true)), and is a pass-through when
- * nothing listens.
+ * gesture ran and where the finger was (and, for onEnd and onFinalize, their second argument: whether
+ * it succeeded), then runs the original. A worklet, so it runs wherever the gesture runs its
+ * callbacks (the UI thread, or JS with runOnJS(true)), and is a pass-through when nothing listens.
  */
 export function __kfGesture<F extends (...args: never[]) => unknown>(fn: F, site: InspectorGestureSite): F {
   const wrapped = (...args: unknown[]) => {
     'worklet'
     const hook = (globalThis as GestureGlobal).__KF_GESTURE__
     if (hook === undefined) return (fn as unknown as (...a: unknown[]) => unknown)(...args)
-    hook(site, args[0])
+    hook(site, args[0], args[1])
     const t0 = __kfNow()
     try {
       return (fn as unknown as (...a: unknown[]) => unknown)(...args)
@@ -340,6 +349,25 @@ export function isInstrumented(): boolean {
   return components.size > 0
 }
 
+/**
+ * The current values of the shared values an animation call writes: its `target` is the variable's name,
+ * found in the same file and component (every mounted instance: a list's rows each own one). Read on the
+ * JS thread; empty when none is registered.
+ */
+export function targetValues(site: { target: string | null; file: string; component: string | null }): unknown[] {
+  if (!site.target) return []
+  const out: unknown[] = []
+  for (const { sv, site: s } of seen().signals.values()) {
+    if (s.name !== site.target || s.file !== site.file || (site.component && s.component && s.component !== site.component)) continue
+    try {
+      out.push((sv as { value?: unknown }).value)
+    } catch {
+      // A value that cannot be read (released): not moving.
+    }
+  }
+  return out
+}
+
 /** The file an app component is written in, or undefined for a library's. Strips wrappers: "Glitches(./glitches.tsx)" → Glitches. */
 export function appComponentFile(name: string): string | undefined {
   return components.get(name) ?? components.get(name.replace(/\(.*\)$/, ''))
@@ -494,6 +522,30 @@ export function renderHints(): InspectorRenderHint[] {
   return [...seen().hints.values()]
 }
 
+// ─── Worklet mistakes ─────────────────────────────────────────────────────────────
+// What the Babel plugin found in each file (workletLint.ts): a call at the top of the file reports it
+// when the file loads, before any worklet runs, so the inspector lists the crash before it happens.
+
+/** Called once per file by the Babel plugin with its findings, and the calls its worklets make that the plugin could not see into. */
+export function __kfWorkletIssues(file: string, issues: InspectorWorkletIssue[], suspects: Array<Omit<KnownSuspect, 'file'>>): void {
+  const s = seen()
+  s.suspects.set(file, suspects.map((x) => ({ ...x, file })))
+  for (const issue of issues) {
+    s.worklets.set(issue.id, issue)
+    ;(globalThis as HookGlobal).__KF_INSPECTOR__?.worklet?.(issue)
+  }
+}
+
+/** Every worklet mistake found in the code so far. */
+export function workletIssues(): InspectorWorkletIssue[] {
+  return [...seen().worklets.values()]
+}
+
+const knownWorklets = () => {
+  const s = seen()
+  return { issues: s.worklets.values(), suspects: [...s.suspects.values()].flat() }
+}
+
 type OsGlobal = { __KF_OS__?: string }
 const viewsChecked = new Set<string>()
 
@@ -551,6 +603,109 @@ export function colorAlpha(c: unknown): number | null {
   return 1
 }
 
+// ─── Heavy visuals ────────────────────────────────────────────────────────────────
+// Two more drawing costs the Babel plugin can place: a react-native-svg element given animated props
+// (react-native-svg keeps no drawing cache, so the whole SVG is drawn again every frame one changes), and
+// an image inside an animated view whose source is far larger than the view (decoded, uploaded and, on
+// Android, scaled at full size while it moves). Both are render hints, found as the app renders and loads.
+
+/**
+ * The animatedProps of a react-native-svg element (`<AnimatedPath animatedProps={…}>`), wrapped by the
+ * Babel plugin: returned as they are. The first time it renders, what its useAnimatedProps animates
+ * becomes an `animated-svg` hint on that call site. `element` is the react-native-svg component (Path, Circle, Svg).
+ */
+export function __kfSvgProps<P>(props: P, styleId: string, element: string): P {
+  const s = seen()
+  if (s.hints.has(`${styleId}:animated-svg`)) return props
+  const links = s.styles.get(styleId)?.links ?? []
+  const named = [...new Set(links.map((l) => `${l.prop} (${l.signal})`))]
+  addHint({ id: styleId, hint: 'animated-svg', detail: `${named.length ? `${named.join(', ')} animated` : 'Animated props'} on react-native-svg's ${element}: the whole SVG is drawn again every frame` })
+  return props
+}
+
+/** A source this many times the pixels it is drawn at, on its shorter side, is far larger than its view. */
+export const IMAGE_OVERSIZE = 4
+/** And this many pixels at least (4 MB decoded): a small image a few times too large costs little. */
+export const IMAGE_MIN_PIXELS = 1_000_000
+/** The pixel scale when the app has not said (native.ts sets it): the largest phones', so a source is never called too large for a screen it fits. */
+const DEFAULT_SCALE = 3
+
+type Size = { w: number; h: number }
+type ImageShared = {
+  /** By image element: the largest source it loaded and the largest it was laid out at. */
+  __KF_IMAGES__?: Map<string, { source: Size | null; view: Size | null }>
+  __KF_IMAGE_FNS__?: Map<string, { prev: unknown; fn: unknown }>
+  __KF_SCALE__?: number
+}
+const images = ((globalThis as ImageShared).__KF_IMAGES__ ??= new Map())
+const imageFns = ((globalThis as ImageShared).__KF_IMAGE_FNS__ ??= new Map())
+
+/**
+ * The onLoad of an image inside an animated view, wrapped by the Babel plugin: notes the source's size
+ * (React Native's Image says it in nativeEvent.source, expo-image in source, FastImage in nativeEvent),
+ * then calls the app's handler. `id` is where the image is written, `inside` the animated view it is in
+ * ("a view animated by cardStyle"). The same function for the same handler.
+ */
+export function __kfImageLoad<F = (e: unknown) => unknown>(id: string, inside: string, prev?: F): F {
+  return imageHandler(id, inside, 'load', prev)
+}
+
+/** The onLayout of the same image: notes the size it is drawn at, then calls the app's handler. */
+export function __kfImageLayout<F = (e: unknown) => unknown>(id: string, inside: string, prev?: F): F {
+  return imageHandler(id, inside, 'layout', prev)
+}
+
+function imageHandler<F>(id: string, inside: string, on: 'load' | 'layout', prev: F | undefined): F {
+  // Something that is not a function (a Reanimated event handler object) is the app's to keep.
+  if (prev != null && typeof prev !== 'function') return prev
+  const key = `${id}|${on}`
+  const cached = imageFns.get(key)
+  if (cached && cached.prev === prev) return cached.fn as F
+  const fn = function (this: unknown, e: unknown) {
+    try {
+      noteImage(id, inside, on, e)
+    } catch {
+      // An event the inspector cannot read is still the app's to handle.
+    }
+    if (typeof prev === 'function') return (prev as (...a: unknown[]) => unknown).apply(this, arguments as unknown as unknown[])
+  }
+  imageFns.set(key, { prev, fn })
+  return fn as F
+}
+
+type ImageEvent = { nativeEvent?: { source?: { width?: unknown; height?: unknown }; width?: unknown; height?: unknown; layout?: { width?: unknown; height?: unknown } }; source?: { width?: unknown; height?: unknown } }
+const positive = (x: unknown): x is number => typeof x === 'number' && x > 0 && Number.isFinite(x)
+
+function noteImage(id: string, inside: string, on: 'load' | 'layout', e: unknown): void {
+  const ev = e as ImageEvent | undefined
+  const size = on === 'load' ? (ev?.nativeEvent?.source ?? ev?.source ?? ev?.nativeEvent) : ev?.nativeEvent?.layout
+  if (!positive(size?.width) || !positive(size?.height)) return
+  const { width: w, height: h } = size as { width: number; height: number }
+  let img = images.get(id)
+  if (!img) images.set(id, (img = { source: null, view: null }))
+  // Rows of a list share the element: the largest source against the largest view, so a mix never calls one too large.
+  if (on === 'load') {
+    if (!img.source || w * h > img.source.w * img.source.h) img.source = { w, h }
+  } else img.view = { w: Math.max(w, img.view?.w ?? 0), h: Math.max(h, img.view?.h ?? 0) }
+  if (img.source && img.view) checkImage(id, inside, img.source, img.view)
+}
+
+function checkImage(id: string, inside: string, source: Size, view: Size): void {
+  if (seen().hints.has(`${id}:oversized-image`)) return
+  const scale = (globalThis as ImageShared).__KF_SCALE__
+  const k = positive(scale) ? scale : DEFAULT_SCALE
+  const px = { w: Math.round(view.w * k), h: Math.round(view.h * k) }
+  // Scaled to cover its view, an image shrinks by its shorter side's ratio: the least it can be too large by.
+  const ratio = Math.min(source.w / px.w, source.h / px.h)
+  if (ratio < IMAGE_OVERSIZE || source.w * source.h < IMAGE_MIN_PIXELS) return
+  const mb = Math.round((source.w * source.h * 4) / 1e5) / 10
+  addHint({
+    id,
+    hint: 'oversized-image',
+    detail: `A ${source.w}x${source.h} image (${mb} MB decoded) drawn at ${Math.round(view.w)}x${Math.round(view.h)} pt (${px.w}x${px.h} px), ${Math.floor(ratio)} times larger on each side, in ${inside}`,
+  })
+}
+
 /**
  * Returns a copy of `args` with each overridden param set: "0" replaces the first argument, "1.duration"
  * a field of the second. Paths that do not exist in this call are ignored rather than created, so a stale
@@ -585,6 +740,8 @@ type SharedState = {
   __KF_TAPS__?: Set<(event: InspectorEvent) => void>
   __KF_CAPTURE__?: { on: boolean; listeners: Set<(on: boolean) => void> }
   __KF_LAYOUTS__?: Map<string, ScreenRect>
+  __KF_LAYOUT_TARGETS__?: Map<string, LayoutTarget>
+  __KF_LAYOUT_NODES__?: Map<string, unknown>
   __KF_LAYOUT_WATCH__?: boolean
 }
 const shared = globalThis as SharedState
@@ -1011,11 +1168,25 @@ export function __kfLayoutMoved(site: MotionSite, prev?: unknown): (e: unknown) 
 
 export type ScreenRect = { x: number; y: number; width: number; height: number }
 const layouts = (shared.__KF_LAYOUTS__ ??= new Map<string, ScreenRect>())
+type LayoutTarget = { measureInWindow?: (cb: (x: number, y: number, w: number, h: number) => void) => void }
+// The views themselves, so a position can be measured again. onLayout fires when a view's own layout
+// changes, not when it moves on screen: a ScrollView scrolling, a header inset applied after the first
+// layout, or a screen transition all move a view without one, and a rect from onLayout alone went stale
+// (outlines drawn a header's height above their views).
+const layoutTargets = (shared.__KF_LAYOUT_TARGETS__ ??= new Map<string, LayoutTarget>())
+// Their shadow nodes (Fabric), for measuring on the UI thread: Reanimated's measure() reads one there,
+// synchronously, every frame. Taken from the host instance the way Reanimated's own refs do
+// (fabricUtils' getShadowNodeWrapperFromRef). Absent on web and the old architecture.
+const layoutNodes = (shared.__KF_LAYOUT_NODES__ ??= new Map<string, unknown>())
 
 /** Start (or stop) recording where animated views are. Off by default: nothing is measured. */
 export function watchLayouts(on: boolean): void {
   shared.__KF_LAYOUT_WATCH__ = on
-  if (!on) layouts.clear()
+  if (!on) {
+    layouts.clear()
+    layoutTargets.clear()
+    layoutNodes.clear()
+  }
 }
 
 /** Window rects of the views each animated style is on, by style id. */
@@ -1023,7 +1194,31 @@ export function getLayouts(): ReadonlyMap<string, ScreenRect> {
   return layouts
 }
 
-type LayoutTarget = { measureInWindow?: (cb: (x: number, y: number, w: number, h: number) => void) => void }
+/** The shadow node of the view a style is on, for measure() on the UI thread; undefined without one. */
+export function getLayoutNode(styleId: string): unknown {
+  return layoutNodes.get(styleId)
+}
+
+/**
+ * Measure these styles' views again, where they are now. Asynchronous, like measureInWindow: the
+ * rects in getLayouts() change when the answers arrive. A view that answers with no size has gone
+ * (unmounted, or off the tree), so it is forgotten.
+ */
+export function remeasureLayouts(styleIds: Iterable<string>): void {
+  if (!shared.__KF_LAYOUT_WATCH__) return
+  for (const id of styleIds) {
+    const target = layoutTargets.get(id)
+    target?.measureInWindow?.((x, y, width, height) => {
+      if (width || height) layouts.set(id, { x, y, width, height })
+      else {
+        layouts.delete(id)
+        layoutTargets.delete(id)
+        layoutNodes.delete(id)
+      }
+    })
+  }
+}
+
 type LayoutEventLike = { currentTarget?: unknown; target?: unknown }
 
 export function __kfLayout(styleId: string, prev?: (e: never) => void): (e: LayoutEventLike) => void {
@@ -1031,6 +1226,9 @@ export function __kfLayout(styleId: string, prev?: (e: never) => void): (e: Layo
     ;(prev as ((e: LayoutEventLike) => void) | undefined)?.(e)
     if (!shared.__KF_LAYOUT_WATCH__) return
     const target = (e?.currentTarget ?? e?.target) as LayoutTarget | undefined
+    if (target?.measureInWindow) layoutTargets.set(styleId, target)
+    const node = (target as { __internalInstanceHandle?: { stateNode?: { node?: unknown } } } | undefined)?.__internalInstanceHandle?.stateNode?.node
+    if (node) layoutNodes.set(styleId, node)
     target?.measureInWindow?.((x, y, width, height) => {
       if (width || height) layouts.set(styleId, { x, y, width, height })
     })
@@ -1060,6 +1258,7 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
   const seenSignals = new WeakMap<object, string>()
   const seenStyles = new Set<string>()
   const seenHints = new Set<string>()
+  const seenWorklets = new Set<string>()
   // Shared values by call site id, for recording and playing back gestures, sensors and scroll.
   const signals = new Map<string, { value: unknown }>()
   const hook: InspectorHook = {
@@ -1078,6 +1277,11 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
       if (seenHints.has(key)) return
       seenHints.add(key)
       send({ kind: 'renderHint', ...h })
+    },
+    worklet(issue) {
+      if (seenWorklets.has(issue.id)) return
+      seenWorklets.add(issue.id)
+      send({ kind: 'workletIssue', ...issue })
     },
     style(site) {
       if (seenStyles.has(site.id)) return
@@ -1119,11 +1323,15 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
     install() {
       ;(globalThis as HookGlobal).__KF_INSPECTOR__ = hook
       // What rendered before this inspector was installed.
-      const { signals: sv, styles, hints } = seen()
+      const { signals: sv, styles, hints, worklets } = seen()
       for (const { sv: v, site } of sv.values()) hook.signal(v, site)
       for (const site of styles.values()) hook.style(site)
       for (const h of hints.values()) hook.hint!(h)
+      for (const w of worklets.values()) hook.worklet!(w)
+      // A worklet crash the plugin did not see coming: placed and reported before the red box.
+      const unwatch = watchWorkletCrashes((issue) => hook.worklet!(issue), knownWorklets)
       return () => {
+        unwatch()
         if ((globalThis as HookGlobal).__KF_INSPECTOR__ === hook) delete (globalThis as HookGlobal).__KF_INSPECTOR__
       }
     },

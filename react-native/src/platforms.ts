@@ -227,6 +227,33 @@ export function reduceMotionSetting(app: (Pick<InspectorAppInfo, 'framework'> & 
   return 'Reduce Motion'
 }
 
+type DeviceLike = (Pick<InspectorAppInfo, 'device'> & { platform?: string }) | null | undefined
+
+/** What the app ran on, in words: "a simulator", "an emulator" (Android), "a real device", or null when its hello did not say. */
+export function deviceKind(app: DeviceLike): string | null {
+  const sim = app?.device?.simulator
+  if (typeof sim !== 'boolean') return null
+  if (!sim) return 'a real device'
+  return app?.platform === 'android' ? 'an emulator' : 'a simulator'
+}
+
+/** Whether one app ran on a simulator or an emulator and the other on a real device (both said which). */
+export function mixedDevices(a: DeviceLike, b: DeviceLike): boolean {
+  const sa = a?.device?.simulator
+  const sb = b?.device?.simulator
+  return typeof sa === 'boolean' && typeof sb === 'boolean' && sa !== sb
+}
+
+/**
+ * The line every report of frame numbers carries when they were measured on a simulator or an
+ * emulator, or null: it runs on the computer's CPU and GPU, so its frame rates, dropped frames and
+ * thread timings are not a phone's (smooth there, choppy on the device).
+ */
+export function simulatorNote(app: DeviceLike): string | null {
+  if (app?.device?.simulator !== true) return null
+  return `Measured on ${deviceKind(app)}: frame rates and timings come from the computer's CPU and GPU, not a device's. Check them on a real device, ideally a low-end one.`
+}
+
 /** How the motion problems are fixed, in the framework's own terms. */
 export type MotionAdvice = {
   /** An animation that moved while the person asked for less motion. */
@@ -325,7 +352,9 @@ export function motionAdviceFor(app: AppLike): MotionAdvice {
 
 /**
  * Render hint keys the SDKs send (InspectorRenderHint), each fixed per framework, with a generic fix
- * for the others. React Native: shadow-path, animated-shadow, animated-layout, animated-blur.
+ * for the others. React Native: shadow-path, animated-shadow, animated-layout, animated-blur,
+ * animated-svg (animated props on a react-native-svg element), oversized-image (an image in an animated
+ * view whose source is far larger than the view).
  * Android: layer-alpha, elevation, mask (a path outline clip), blur (the window's). iOS: shadow-path,
  * mask, blur (a blur view that moves), group-opacity, rasterize. Flutter: mask (ClipPath,
  * ShaderMask), blur (ImageFiltered, BackdropFilter), save-layer, opacity-widget.
@@ -396,6 +425,16 @@ const HINTS: Record<string, Partial<Record<FixGroup, string>> & { generic: strin
   'animated-blur': {
     'react-native': "Animating a blur (the filter's blur, or a BlurView's intensity) blurs again every frame. Keep the radius fixed and fade between a sharp and a blurred view, or blur a still snapshot.",
     generic: "Animating a blur's radius blurs again every frame: keep it fixed and fade between a sharp and a blurred copy.",
+  },
+  'animated-svg': {
+    'react-native':
+      "react-native-svg keeps no drawing cache: animated props on an SVG element (a Path's d, a Circle's r) draw the whole SVG again every frame they change, and with many paths or a large canvas that drops frames. Animate a transform or opacity on an Animated.View around the SVG instead, draw fewer elements, or draw it with react-native-skia, which animates on the UI thread without React.",
+    generic: 'An SVG drawn again every frame its properties change drops frames with many paths or a large canvas: animate a transform on a view around it instead, draw fewer elements, or draw it on a GPU canvas.',
+  },
+  'oversized-image': {
+    'react-native':
+      'A source far larger than its view is downloaded, decoded and kept in memory at full size, and on Android scaled down again every frame the view moves. Load one near the size it is drawn at (its size in points times the screen scale: a resized asset, or a CDN size parameter), or show it with expo-image, which downscales it to its view (allowDownscaling), and keep the full size for where it is shown large.',
+    generic: 'A source far larger than its view is decoded and kept at full size, and scaled every frame the view moves: load one near the size it is drawn at, or decode it at that size.',
   },
   'save-layer': {
     flutter: 'Clip.antiAliasWithSaveLayer renders the clipped content into a saved layer every frame it moves: use Clip.antiAlias or Clip.hardEdge, which clip without one, unless the clip really needs the save layer.',

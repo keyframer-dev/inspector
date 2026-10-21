@@ -1,0 +1,792 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Expo with the worklets plugin in babel.config.js > adds both plugins before it, follows NODE_ENV in the cache, uses AsyncStorage 1`] = `
+{
+  "App.tsx": "import Animated, { FadeIn } from 'react-native-reanimated';
+import { Text } from 'react-native';
+import './keyframer';
+
+export default function App() {
+  return (
+    <Animated.View entering={FadeIn} style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <Text>Hello</Text>
+    </Animated.View>
+  );
+}
+",
+  "babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV);
+  const dev = process.env.NODE_ENV !== 'production';
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: [
+      ...(dev ? ['@keyframerdev/inspector/babel'] : []),
+      '@keyframerdev/vitals/babel',
+      // Reanimated's plugin, last.
+      'react-native-worklets/plugin',
+    ],
+  };
+};
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in Expo's dev tools (press shift+m in Metro, then open @keyframerdev/inspector).
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { startVitals } from '@keyframerdev/vitals';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectDevTools } = require('@keyframerdev/inspector/devtools');
+  connectDevTools({ app: 'Worklets App' });
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2';
+const build = Platform.OS === 'ios' ? Constants.platform?.ios?.buildNumber : Constants.expoConfig?.android?.versionCode;
+
+startVitals({
+  key: VITALS_KEY,
+  appVersion: Constants.expoConfig?.version ?? '0',
+  build: build == null ? undefined : String(build),
+  storage: AsyncStorage, // checkpoints, retries and the daily cap survive restarts
+});
+",
+  "package.json": "{
+  "name": "worklets-app",
+  "version": "2.3.0",
+  "main": "node_modules/expo/AppEntry.js",
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "expo": "~57.0.10",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1",
+    "@keyframerdev/vitals": "*",
+    "expo-constants": "*"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "babel-preset-expo": "^57.0.14",
+    "typescript": "~6.0.3",
+    "@keyframerdev/inspector": "*"
+  },
+  "private": true
+}
+",
+}
+`;
+
+exports[`Expo, blank (App.tsx, no babel config, no Reanimated) > creates the docs babel config, installs Reanimated, worklets, expo-constants and babel-preset-expo with bun 1`] = `
+{
+  "babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV)
+  const dev = process.env.NODE_ENV !== 'production'
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: [...(dev ? ['@keyframerdev/inspector/babel'] : []), '@keyframerdev/vitals/babel'],
+  }
+}
+",
+  "index.ts": "import { registerRootComponent } from 'expo';
+
+import App from './App';
+import './keyframer';
+
+// registerRootComponent calls AppRegistry.registerComponent('main', () => App);
+// It also ensures that whether you load the app in Expo Go or in a native build,
+// the environment is set up appropriately
+registerRootComponent(App);
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in Expo's dev tools (press shift+m in Metro, then open @keyframerdev/inspector).
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { startVitals } from '@keyframerdev/vitals';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectDevTools } = require('@keyframerdev/inspector/devtools');
+  connectDevTools({ app: 'blank-app' });
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2';
+const build = Platform.OS === 'ios' ? Constants.platform?.ios?.buildNumber : Constants.expoConfig?.android?.versionCode;
+
+startVitals({
+  key: VITALS_KEY,
+  appVersion: Constants.expoConfig?.version ?? '0',
+  build: build == null ? undefined : String(build),
+});
+",
+  "package.json": "{
+  "name": "blank-app",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "expo start"
+  },
+  "dependencies": {
+    "expo": "~57.0.10",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "@keyframerdev/vitals": "*",
+    "react-native-reanimated": "*",
+    "react-native-worklets": "*",
+    "expo-constants": "*"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3",
+    "@keyframerdev/inspector": "*",
+    "babel-preset-expo": "*"
+  },
+  "private": true
+}
+",
+}
+`;
+
+exports[`JavaScript (App.js, double quotes, no semicolons) > writes keyframer.js in the app's own style, for the editor view 1`] = `
+{
+  "babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV)
+  const dev = process.env.NODE_ENV !== "production"
+  return {
+    presets: ["babel-preset-expo"],
+    plugins: [...(dev ? ["@keyframerdev/inspector/babel"] : []), "@keyframerdev/vitals/babel"],
+  }
+}
+",
+  "index.js": "import { registerRootComponent } from "expo"
+import App from "./App"
+import "./keyframer"
+
+registerRootComponent(App)
+",
+  "keyframer.js": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in the Keyframer editor's Inspector panel.
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { startVitals } from "@keyframerdev/vitals"
+import Constants from "expo-constants"
+import { Platform } from "react-native"
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectInspector } = require("@keyframerdev/inspector/native")
+  // The pairing code the editor's Inspector panel shows (a new code there means a new one here).
+  connectInspector({ apiUrl: "https://api.keyframer.dev", code: "ABC234", app: "JS App" })
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = "kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2"
+const build = Platform.OS === "ios" ? Constants.platform?.ios?.buildNumber : Constants.expoConfig?.android?.versionCode
+
+startVitals({
+  key: VITALS_KEY,
+  appVersion: Constants.expoConfig?.version ?? "0",
+  build: build == null ? undefined : String(build),
+})
+",
+  "package.json": "{
+  "name": "js-app",
+  "version": "0.4.2",
+  "main": "index.js",
+  "dependencies": {
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1",
+    "@keyframerdev/vitals": "*"
+  },
+  "private": true,
+  "devDependencies": {
+    "@keyframerdev/inspector": "*"
+  }
+}
+",
+}
+`;
+
+exports[`React Navigation with a ref of its own (Expo, src/) > follows the ref to createNavigationContainerRef, calls useKeyframer with it, wraps in VitalsRoot 1`] = `
+{
+  "babel.config.js": "module.exports = function (api) {
+  api.cache(true)
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: ['@keyframerdev/vitals/babel'],
+  }
+}
+",
+  "package.json": "{
+  "name": "ref-app",
+  "version": "3.1.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@react-navigation/native": "^7.1.8",
+    "@react-navigation/native-stack": "^7.3.14",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1",
+    "@keyframerdev/vitals": "*"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}
+",
+  "src/App.tsx": "import { NavigationContainer } from '@react-navigation/native'
+import { createNativeStackNavigator } from '@react-navigation/native-stack'
+import { navigationRef, type RootStackParamList } from './navigation/RootNavigation'
+import { Home } from './screens/Home'
+import { Profile } from './screens/Profile'
+import { useKeyframer } from './keyframer'
+import { VitalsRoot } from '@keyframerdev/vitals'
+
+const Stack = createNativeStackNavigator<RootStackParamList>()
+
+export default function App() {
+  useKeyframer(navigationRef)
+
+  // Analytics reads the route from the same ref.
+  return (
+    <VitalsRoot>
+      <NavigationContainer ref={navigationRef}>
+        <Stack.Navigator>
+          <Stack.Screen name="Home" component={Home} />
+          <Stack.Screen name="Profile" component={Profile} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </VitalsRoot>
+  )
+}
+",
+  "src/keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { startVitals, type NavigationRefLike } from '@keyframerdev/vitals'
+import Constants from 'expo-constants'
+import { useEffect } from 'react'
+import { Platform } from 'react-native'
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2'
+const build = Platform.OS === 'ios' ? Constants.platform?.ios?.buildNumber : Constants.expoConfig?.android?.versionCode
+
+/** Call once in src/App.tsx, with the navigation container's ref: screens are named from its routes. */
+export function useKeyframer(navigationRef: NavigationRefLike) {
+  useEffect(() => {
+    startVitals({
+      key: VITALS_KEY,
+      appVersion: Constants.expoConfig?.version ?? '0',
+      build: build == null ? undefined : String(build),
+      navigationRef,
+    })
+  }, [navigationRef])
+}
+",
+}
+`;
+
+exports[`React Navigation with two containers > edits neither: prints the snippet and both places, imports the wizard's file in the entry 1`] = `
+{
+  "babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV);
+  const dev = process.env.NODE_ENV !== 'production';
+  return { presets: ['babel-preset-expo'], plugins: dev ? ['@keyframerdev/inspector/babel'] : [] };
+};
+",
+  "index.js": "import { registerRootComponent } from 'expo';
+import App from './App';
+import './keyframer';
+
+registerRootComponent(App);
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in Expo's dev tools (press shift+m in Metro, then open @keyframerdev/inspector).
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { createNavigationContainerRef } from '@react-navigation/native';
+
+/** On your NavigationContainer (ref={navigationRef}): screens are named from its routes. */
+export const navigationRef = createNavigationContainerRef();
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectDevTools } = require('@keyframerdev/inspector/devtools');
+  const { trackNavigation } = require('@keyframerdev/inspector/record');
+  connectDevTools({ app: 'Two Containers' });
+  // Screen changes become markers in a recording, from the container's first state.
+  let tracking = false;
+  navigationRef.addListener('state', () => {
+    if (tracking) return;
+    tracking = true;
+    trackNavigation(navigationRef);
+  });
+}
+",
+  "package.json": "{
+  "name": "two-containers",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@react-navigation/native": "^7.1.8",
+    "@react-navigation/native-stack": "^7.3.14",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.3",
+    "@keyframerdev/inspector": "*"
+  },
+  "private": true
+}
+",
+}
+`;
+
+exports[`React Navigation, a NavigationContainer without a ref (bare React Native) > gives it the wizard ref, converts the babel object to a function, reads versions from device-info 1`] = `
+{
+  "App.tsx": "import {NavigationContainer, DefaultTheme} from '@react-navigation/native';
+import {createNativeStackNavigator} from '@react-navigation/native-stack';
+import {HomeScreen} from './screens/Home';
+import {DetailsScreen} from './screens/Details';
+import {navigationRef} from './keyframer';
+
+const Stack = createNativeStackNavigator();
+
+function App(): React.JSX.Element {
+  return (
+    <NavigationContainer
+      ref={navigationRef}
+      theme={DefaultTheme}
+      onReady={() => console.log('navigation ready')}>
+      <Stack.Navigator>
+        <Stack.Screen name="Home" component={HomeScreen} />
+        <Stack.Screen name="Details" component={DetailsScreen} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
+
+export default App;
+",
+  "babel.config.js": "module.exports = function (api) {
+  const dev = api.env('development');
+  return {
+    presets: ['module:@react-native/babel-preset'],
+    plugins: [...(dev ? ['@keyframerdev/inspector/babel'] : []), '@keyframerdev/vitals/babel', 'react-native-worklets/plugin'],
+  };
+};
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in the Keyframer Inspector desktop app.
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import {startVitals} from '@keyframerdev/vitals';
+import {createNavigationContainerRef} from '@react-navigation/native';
+import DeviceInfo from 'react-native-device-info';
+
+/** On your NavigationContainer (ref={navigationRef}): screens are named from its routes. */
+export const navigationRef = createNavigationContainerRef();
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const {connectInspector} = require('@keyframerdev/inspector/native');
+  const {trackNavigation} = require('@keyframerdev/inspector/record');
+  // The desktop app's relay. On a phone, use the Mac's LAN address the app shows in its status bar.
+  // On an Android emulator, run \`adb reverse tcp:8790 tcp:8790\` first.
+  connectInspector({apiUrl: 'http://127.0.0.1:8790', code: 'DESKTOP', app: 'NavApp'});
+  // Screen changes become markers in a recording, from the container's first state.
+  let tracking = false;
+  navigationRef.addListener('state', () => {
+    if (tracking) return;
+    tracking = true;
+    trackNavigation(navigationRef);
+  });
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2';
+
+startVitals({
+  key: VITALS_KEY,
+  appVersion: DeviceInfo.getVersion(),
+  build: DeviceInfo.getBuildNumber(),
+  navigationRef,
+});
+",
+  "package.json": "{
+  "name": "NavApp",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start"
+  },
+  "dependencies": {
+    "@react-navigation/native": "^7.1.8",
+    "@react-navigation/native-stack": "^7.3.14",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-device-info": "^14.0.4",
+    "react-native-reanimated": "4.5.1",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.26.0",
+    "react-native-worklets": "0.10.1",
+    "@keyframerdev/vitals": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@react-native/babel-preset": "0.86.2",
+    "@types/react": "^19.2.0",
+    "typescript": "^6.0.3",
+    "@keyframerdev/inspector": "*"
+  }
+}
+",
+}
+`;
+
+exports[`a pnpm monorepo (the app in apps/mobile) > finds pnpm at the workspace root, installs from the app folder 1`] = `
+{
+  "apps/mobile/app/_layout.tsx": "import { Stack, useNavigationContainerRef } from 'expo-router'
+import { useKeyframer } from '../keyframer'
+
+export default function Layout() {
+  const navigationRef = useNavigationContainerRef()
+  useKeyframer(navigationRef)
+
+  return <Stack screenOptions={{ headerShown: false }} />
+}
+",
+  "apps/mobile/babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV)
+  const dev = process.env.NODE_ENV !== 'production'
+  return { presets: ['babel-preset-expo'], plugins: dev ? ['@keyframerdev/inspector/babel'] : [] }
+}
+",
+  "apps/mobile/keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in Expo's dev tools (press shift+m in Metro, then open @keyframerdev/inspector).
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { useEffect } from 'react'
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectDevTools } = require('@keyframerdev/inspector/devtools')
+  connectDevTools({ app: 'Acme' })
+}
+
+/** Call once in app/_layout.tsx, with the navigation container's ref: screens are named from its routes. */
+export function useKeyframer(navigationRef: object) {
+  useEffect(() => {
+    // Screen changes become markers in an Inspector recording.
+    if (__DEV__) return require('@keyframerdev/inspector/record').trackNavigation(navigationRef)
+  }, [navigationRef])
+}
+",
+  "apps/mobile/package.json": "{
+  "name": "mobile",
+  "version": "1.2.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@acme/ui": "workspace:*",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "expo-router": "~57.0.10",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "babel-preset-expo": "^57.0.14",
+    "typescript": "~6.0.3",
+    "@keyframerdev/inspector": "*"
+  },
+  "private": true
+}
+",
+}
+`;
+
+exports[`bare React Native (index.js + App.tsx) > converts the babel config, adds the worklets plugin last, installs Reanimated with npm, says to pod install 1`] = `
+{
+  "babel.config.js": "module.exports = function (api) {
+  const dev = api.env('development');
+  return {
+    presets: ['module:@react-native/babel-preset'],
+    plugins: [...(dev ? ['@keyframerdev/inspector/babel'] : []), '@keyframerdev/vitals/babel', 'react-native-worklets/plugin'],
+  };
+};
+",
+  "index.js": "/**
+ * @format
+ */
+
+import {AppRegistry} from 'react-native';
+import App from './App';
+import {name as appName} from './app.json';
+import './keyframer';
+
+AppRegistry.registerComponent(appName, () => App);
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in the Keyframer Inspector desktop app.
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import {startVitals} from '@keyframerdev/vitals';
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const {connectInspector} = require('@keyframerdev/inspector/native');
+  // The desktop app's relay. On a phone, use the Mac's LAN address the app shows in its status bar.
+  // On an Android emulator, run \`adb reverse tcp:8790 tcp:8790\` first.
+  connectInspector({apiUrl: 'http://127.0.0.1:8790', code: 'DESKTOP', app: 'BareApp'});
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2';
+
+startVitals({
+  key: VITALS_KEY,
+  appVersion: '0.0.1', // package.json's version: keep it in step with your releases
+});
+",
+  "package.json": "{
+  "name": "BareApp",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start"
+  },
+  "dependencies": {
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "@keyframerdev/vitals": "*",
+    "react-native-reanimated": "*",
+    "react-native-worklets": "*"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@react-native/babel-preset": "0.86.2",
+    "@react-native/typescript-config": "0.86.2",
+    "@types/react": "^19.2.0",
+    "typescript": "^6.0.3",
+    "@keyframerdev/inspector": "*"
+  }
+}
+",
+}
+`;
+
+exports[`expo-router (the tabs template) > interactive: asks, shows the plan, writes, installs, offers agents, waits for the app > questions 1`] = `
+[
+  "ask: Continue anyway? → true",
+  "ask: What do you want to set up? → ["inspector","vitals"]",
+  "ask: Where do you want to see the Inspector? → "devtools"",
+  "ask: Wrap your app in <VitalsRoot>? Touches then open motion windows, so lists without scroll handlers are measured too (optional). → true",
+  "ask: Create babel.config.js? → true",
+  "ask: Create keyframer.ts? → true",
+  "ask: Change app/_layout.tsx? → true",
+]
+`;
+
+exports[`expo-router (the tabs template) > interactive: asks, shows the plan, writes, installs, offers agents, waits for the app 1`] = `
+{
+  "NOTES.md": "work in progress
+",
+  "app/_layout.tsx": "import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
+import { Stack, useNavigationContainerRef } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
+import { useEffect } from 'react';
+import 'react-native-reanimated';
+
+import { useColorScheme } from '@/components/useColorScheme';
+import { useKeyframer } from '../keyframer';
+import { VitalsRoot } from '@keyframerdev/vitals';
+
+export {
+  // Catch any errors thrown by the Layout component.
+  ErrorBoundary,
+} from 'expo-router';
+
+export const unstable_settings = {
+  // Ensure that reloading on \`/modal\` keeps a back button present.
+  initialRouteName: '(tabs)',
+};
+
+// Prevent the splash screen from auto-hiding before asset loading is complete.
+SplashScreen.preventAutoHideAsync();
+
+export default function RootLayout() {
+  const navigationRef = useNavigationContainerRef();
+  useKeyframer(navigationRef);
+
+  const [loaded, error] = useFonts({
+    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
+    ...FontAwesome.font,
+  });
+
+  // Expo Router uses Error Boundaries to catch errors in the navigation tree.
+  useEffect(() => {
+    if (error) throw error;
+  }, [error]);
+
+  useEffect(() => {
+    if (loaded) {
+      SplashScreen.hideAsync();
+    }
+  }, [loaded]);
+
+  if (!loaded) {
+    return null;
+  }
+
+  return (
+    <VitalsRoot>
+      <RootLayoutNav />
+    </VitalsRoot>
+  );
+}
+
+function RootLayoutNav() {
+  const colorScheme = useColorScheme();
+
+  return (
+    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+      <Stack>
+        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="modal" options={{ presentation: 'modal' }} />
+      </Stack>
+    </ThemeProvider>
+  );
+}
+",
+  "babel.config.js": "module.exports = function (api) {
+  api.cache.using(() => process.env.NODE_ENV)
+  const dev = process.env.NODE_ENV !== 'production'
+  return {
+    presets: ['babel-preset-expo'],
+    plugins: [...(dev ? ['@keyframerdev/inspector/babel'] : []), '@keyframerdev/vitals/babel'],
+  }
+}
+",
+  "keyframer.ts": "/**
+ * Keyframer, set up by @keyframerdev/wizard. Running the wizard again updates this file.
+ * The Inspector runs in development builds only, shown in Expo's dev tools (press shift+m in Metro, then open @keyframerdev/inspector).
+ * Motion Vitals reports slow frames and janky animations from every build: https://keyframer.dev/app/vitals
+ * Docs: https://keyframer.dev/inspector/docs
+ */
+import { startVitals, type NavigationRefLike } from '@keyframerdev/vitals';
+import Constants from 'expo-constants';
+import { useEffect } from 'react';
+import { Platform } from 'react-native';
+
+// The Inspector, in development only: \`require\` inside \`if (__DEV__)\` keeps it out of release builds.
+if (__DEV__) {
+  const { connectDevTools } = require('@keyframerdev/inspector/devtools');
+  connectDevTools({ app: 'Tabs App' });
+}
+
+// The project's field key. It is public and write-only (it can only send reports to this project),
+// so it is safe to ship in the app, like the docs show.
+const VITALS_KEY = 'kfp_live_A1b2C3d4E5f6G7h8I9j0K1l2';
+const build = Platform.OS === 'ios' ? Constants.platform?.ios?.buildNumber : Constants.expoConfig?.android?.versionCode;
+
+/** Call once in app/_layout.tsx, with the navigation container's ref: screens are named from its routes. */
+export function useKeyframer(navigationRef: NavigationRefLike) {
+  useEffect(() => {
+    startVitals({
+      key: VITALS_KEY,
+      appVersion: Constants.expoConfig?.version ?? '0',
+      build: build == null ? undefined : String(build),
+      navigationRef,
+    });
+  }, [navigationRef]);
+  useEffect(() => {
+    // Screen changes become markers in an Inspector recording.
+    if (__DEV__) return require('@keyframerdev/inspector/record').trackNavigation(navigationRef);
+  }, [navigationRef]);
+}
+",
+  "package.json": "{
+  "name": "tabs-app",
+  "main": "expo-router/entry",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "expo start"
+  },
+  "dependencies": {
+    "@expo/vector-icons": "^15.0.2",
+    "@react-navigation/native": "^7.1.8",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "expo-font": "~57.0.3",
+    "expo-linking": "~57.0.12",
+    "expo-router": "~57.0.10",
+    "expo-splash-screen": "~57.0.4",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "~4.26.0",
+    "react-native-worklets": "0.10.1",
+    "@keyframerdev/vitals": "*"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "typescript": "~6.0.3",
+    "@keyframerdev/inspector": "*",
+    "babel-preset-expo": "*"
+  },
+  "private": true
+}
+",
+}
+`;

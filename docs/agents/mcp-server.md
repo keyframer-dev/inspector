@@ -40,6 +40,8 @@ Settings shows the same for Cursor, VS Code, Codex, Windsurf and Zed. Clients th
 
 ### Without it
 
+In a React Native or Expo app, the setup wizard, [@keyframerdev/wizard](../getting-started/wizard.md), writes this for you (`.mcp.json` for Claude Code, `.cursor/mcp.json` for Cursor) when you pick the agents, or with `--agents claude-code,cursor`.
+
 The command in the npm package (Node 20.10 or later). For React Native on Metro, it finds the Metro the app is on (8081 to 8090) by itself. These use the project's installed copy; outside a project with the package, run `npx -y @keyframerdev/inspector mcp` instead:
 
 ```sh

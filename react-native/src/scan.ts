@@ -27,7 +27,7 @@
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Platform, Pressable, StyleSheet, Text, View, type GestureResponderEvent } from 'react-native'
-import { useFrameCallback, useSharedValue } from 'react-native-reanimated'
+import Animated, { useAnimatedStyle, useFrameCallback, useSharedValue, type SharedValue } from 'react-native-reanimated'
 import { scheduleOnRN } from 'react-native-worklets'
 import { setCaptureRoot } from './capture'
 import { MotionTracker, droppedFrames, frameIntervalOf } from './motionStats'
@@ -35,7 +35,7 @@ import { currentRefreshRate, noteDisplay, uiThreadBridge, watchDisplay } from '.
 import { createDisplayMeter, frameBudget, tickDisplayMeter, type DisplayMeter } from './display'
 import { configureRecorder, isRecording, recordingElapsed, recordTouches, startRecording, stopRecording, watchRecording, watchSaved, type RecorderConfig } from './record'
 import { realFrameTime } from './clock'
-import { createInspector, getLayouts, isCapturing, isInspectorInstalled, tapInspector, tapTimeScale, timeScale, watchCapturing, watchLayouts } from './runtime'
+import { createInspector, getLayoutNode, getLayouts, isCapturing, isInspectorInstalled, remeasureLayouts, tapInspector, targetValues, tapTimeScale, timeScale, watchCapturing, watchLayouts } from './runtime'
 
 export { isInstrumented } from './runtime'
 
@@ -56,6 +56,11 @@ export type MotionScanProps = {
   recorder?: boolean | RecorderConfig
   /** Where the pill sits. Top right by default; move it when it covers a navigation header. */
   corner?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+  /**
+   * Whether outlines start on. The square next to the pill turns them on and off while the app runs;
+   * off, nothing is measured or drawn, and the pill keeps counting frames.
+   */
+  outlines?: boolean
 }
 
 const CORNERS = {
@@ -108,10 +113,37 @@ function release(s: Session) {
 }
 
 const COLORS = { ok: '#4ade80', warn: '#fbbf24', bad: '#f43f5e' }
+
+/** Outlines drawn at once; past this the least recent are left out. */
+const MAX_OUTLINES = 32
+const OFF = -10000
+
+type Measured = { pageX: number; pageY: number; width: number; height: number } | null
+
+/**
+ * One outline, placed on the UI thread: its rect is slot `index` of `rects` (x, y, width, height), which
+ * a frame callback writes from Reanimated's measure() every frame. Colour, fade and badge come from JS.
+ */
+function OutlineSlot({ index, rects, color, opacity, dropped }: { index: number; rects: SharedValue<number[]>; color: string; opacity: number; dropped: number }) {
+  const place = useAnimatedStyle(() => {
+    'worklet'
+    const r = rects.value
+    const i = index * 4
+    const x = r[i] ?? OFF
+    const y = r[i + 1] ?? OFF
+    // Position as a transform (no layout pass); the size only changes when the view's does.
+    return { transform: [{ translateX: x }, { translateY: y }], width: r[i + 2] ?? 0, height: r[i + 3] ?? 0 }
+  }, [rects, index])
+  return h(
+    Animated.View,
+    { pointerEvents: 'none', style: [styles.outline, { left: 0, top: 0, borderColor: color, opacity }, place] },
+    dropped > 0 ? h(Text, { style: [styles.badge, { backgroundColor: color }] }, `${dropped}`) : null,
+  )
+}
 const tone = (dropped: number) => (dropped === 0 ? COLORS.ok : dropped <= 3 ? COLORS.warn : COLORS.bad)
 const short = (file: string) => file.split('/').pop() ?? file
 
-export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel = true, debug = false, recorder, corner = 'top-right' }: MotionScanProps) {
+export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel = true, debug = false, recorder, corner = 'top-right', outlines: outlinesAtStart = true }: MotionScanProps) {
   // Started during the first render, before the children render, so nothing they do is missed.
   const sessionRef = useRef<Session | null>(null)
   if (enabled && !sessionRef.current) sessionRef.current = acquire()
@@ -129,6 +161,9 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   const [gaps, setGaps] = useState({ min: 0, max: 0 })
   const [, setTick] = useState(0)
   const [open, setOpen] = useState(false)
+  const [showOutlines, setShowOutlines] = useState(outlinesAtStart)
+  const showOutlinesRef = useRef(showOutlines)
+  showOutlinesRef.current = showOutlines
   // Hidden while the inspector snapshots the screen for an export.
   const [hidden, setHidden] = useState(isCapturing)
   useEffect(() => watchCapturing(setHidden), [])
@@ -272,16 +307,72 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   // Redraw the outlines a few times a second, and only while there is something to outline (or one just
   // faded out): an idle scan commits nothing, so it costs the UI thread no frames of its own.
   const drawn = useRef(0)
+  // The last value each endless loop's target had, to tell a running loop from one that stopped.
+  const lastValues = useRef(new Map<string, string>())
   useEffect(() => {
     if (!enabled) return
     const id = setInterval(() => {
-      const n = sessionRef.current?.tracker.outlines(Date.now(), fadeMs).length ?? 0
-      if (n === 0 && drawn.current === 0) return
-      drawn.current = n
+      const tracker = sessionRef.current?.tracker
+      // Endless loops stay outlined while their value keeps changing (a few reads a second, off render).
+      tracker?.keepEndless(Date.now(), (site) => {
+        const key = site.id
+        const now = JSON.stringify(targetValues(site)) ?? ''
+        const changed = now !== '[]' && lastValues.current.get(key) !== now
+        lastValues.current.set(key, now)
+        return changed
+      })
+      // Outlines off: nothing to measure or draw (one last redraw clears what was on screen).
+      const live = showOutlinesRef.current ? (tracker?.outlines(Date.now(), fadeMs) ?? []) : []
+      if (live.length === 0 && drawn.current === 0) return
+      drawn.current = live.length
+      // Where the outlined views are now: they move without a layout event (scrolling, a header inset,
+      // a transition). The answers land before the next redraw.
+      remeasureLayouts(live.map((o) => o.styleId))
       setTick((t) => t + 1)
     }, 125)
     return () => clearInterval(id)
   }, [enabled, fadeMs])
+
+  // Outlines follow their views on the UI thread. JS decides what to outline and how (colour, fade, the
+  // badge) a few times a second; every frame, the UI thread measures each outlined view (Reanimated's
+  // measure, on the view's shadow node) and the slot follows through an animated style. So an outline
+  // keeps up with scrolling and transitions, and still moves while the JS thread is blocked (which is
+  // one of the things the scan reports). A view without a shadow node (web, the old architecture) or one
+  // measure cannot read (flattened on Android) uses the JS measurement instead.
+  const slotOf = useRef(new Map<string, number>())
+  const slotNodes = useSharedValue<unknown[]>([])
+  const slotFallback = useSharedValue<number[]>([])
+  const slotRects = useSharedValue<number[]>([])
+  const placer = useFrameCallback(() => {
+    'worklet'
+    const nodes = slotNodes.value
+    const fallback = slotFallback.value
+    const measureNode = (globalThis as { _measure?: (node: unknown) => Measured })._measure
+    const out: number[] = []
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i]
+      let m: Measured = null
+      if (node && measureNode) {
+        try {
+          m = measureNode(node)
+        } catch {
+          m = null
+        }
+      }
+      if (m && !isNaN(m.pageX) && (m.width > 0 || m.height > 0)) out.push(m.pageX, m.pageY, m.width, m.height)
+      else out.push(fallback[i * 4] ?? OFF, fallback[i * 4 + 1] ?? OFF, fallback[i * 4 + 2] ?? 0, fallback[i * 4 + 3] ?? 0)
+    }
+    slotRects.value = out
+  }, false)
+  const pendingSlots = useRef<{ nodes: unknown[]; fallback: number[]; measured: boolean }>({ nodes: [], fallback: [], measured: false })
+  useEffect(() => {
+    const { nodes, fallback, measured } = pendingSlots.current
+    slotNodes.value = nodes
+    slotFallback.value = fallback
+    // Nothing to measure on the UI thread: the JS rects are the rects, and the callback sleeps.
+    if (!measured) slotRects.value = fallback
+    placer.setActive(measured)
+  })
 
   // Touches reach the recorder from the root, before any child handles them. Bubbling props: they
   // never take the responder from the app.
@@ -296,22 +387,40 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   const tracker = sessionRef.current?.tracker
   const now = Date.now()
   const layouts = getLayouts()
-  const outlines = tracker
-    ? tracker.outlines(now, fadeMs).flatMap((o) => {
-        const r = layouts.get(o.styleId)
-        if (!r) return []
-        const color = tone(o.dropped)
-        const opacity = o.live ? 1 : Math.max(0, 1 - o.age / fadeMs)
-        return [
-          h(View, {
-            key: o.styleId,
-            pointerEvents: 'none',
-            style: [styles.outline, { left: r.x, top: r.y, width: r.width, height: r.height, borderColor: color, opacity }],
-          },
-          o.dropped > 0 ? h(Text, { style: [styles.badge, { backgroundColor: color }] }, `${o.dropped}`) : null),
-        ]
-      })
-    : []
+  // Each outlined style keeps its slot while it is outlined, so its animated style is not handed to
+  // another view mid-frame.
+  const live = (tracker && showOutlines ? tracker.outlines(now, fadeMs) : []).filter((o) => layouts.has(o.styleId) || getLayoutNode(o.styleId))
+  const slots = slotOf.current
+  for (const id of [...slots.keys()]) if (!live.some((o) => o.styleId === id)) slots.delete(id)
+  const taken = new Set(slots.values())
+  const nodes: unknown[] = []
+  const fallback: number[] = []
+  const outlines = live.flatMap((o) => {
+    let slot = slots.get(o.styleId)
+    if (slot === undefined) {
+      for (let i = 0; i < MAX_OUTLINES; i++) {
+        if (!taken.has(i)) {
+          slot = i
+          break
+        }
+      }
+      if (slot === undefined) return []
+      slots.set(o.styleId, slot)
+      taken.add(slot)
+    }
+    const r = layouts.get(o.styleId)
+    nodes[slot] = getLayoutNode(o.styleId) ?? null
+    fallback.splice(slot * 4, 4, r?.x ?? OFF, r?.y ?? OFF, r?.width ?? 0, r?.height ?? 0)
+    const color = tone(o.dropped)
+    const opacity = o.live ? 1 : Math.max(0, 1 - o.age / fadeMs)
+    return [h(OutlineSlot, { key: o.styleId, index: slot, rects: slotRects, color, opacity, dropped: o.dropped })]
+  })
+  const size = Math.max(0, ...[...taken].map((i) => i + 1))
+  for (let i = 0; i < size; i++) {
+    nodes[i] ??= null
+    for (let k = 0; k < 4; k++) fallback[i * 4 + k] ??= k < 2 ? OFF : 0
+  }
+  pendingSlots.current = { nodes, fallback, measured: Platform.OS !== 'web' && nodes.some(Boolean) }
 
   const worst = tracker?.worst(5) ?? []
   const recClock = `${Math.floor(recMs / 60000)}:${String(Math.floor(recMs / 1000) % 60).padStart(2, '0')}`
@@ -334,13 +443,25 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
         h(Text, { style: [styles.pillText, { color: rec ? '#fff' : '#fafafa' }] }, rec ? recClock : 'REC'),
       )
     : null
+  const outlineToggle = h(
+    Pressable,
+    {
+      onPress: () => setShowOutlines((v) => !v),
+      accessibilityRole: 'switch',
+      accessibilityLabel: 'Outlines',
+      accessibilityState: { checked: showOutlines },
+      hitSlop: 6,
+      style: [styles.pill, styles.togglePill],
+    },
+    h(View, { style: [styles.toggleSquare, showOutlines ? styles.toggleOn : styles.toggleOff] }),
+  )
   const savedNote = saved ? h(Text, { style: styles.saved, numberOfLines: 2 }, saved) : null
   const panel = showPanel
     ? h(
         View,
         { style: [styles.panelWrap, CORNERS[corner]], pointerEvents: 'box-none' },
         savedNote,
-        h(View, { style: styles.pillRow, pointerEvents: 'box-none' }, recButton, h(
+        h(View, { style: styles.pillRow, pointerEvents: 'box-none' }, recButton, outlineToggle, h(
           Pressable,
           { onPress: () => setOpen((v) => !v), style: styles.pill },
           h(Text, { style: [styles.pillText, { color: rates.ui && rates.ui < 50 ? COLORS.bad : COLORS.ok }] }, `UI ${rates.ui || '–'}`),
@@ -391,6 +512,10 @@ const styles = StyleSheet.create({
   recDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#f43f5e' },
   saved: { maxWidth: 260, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, overflow: 'hidden', fontSize: 11, color: '#fafafa', backgroundColor: 'rgba(17,17,20,0.88)' },
   recSquare: { width: 8, height: 8, borderRadius: 2, backgroundColor: '#fff' },
+  togglePill: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 8 },
+  toggleSquare: { width: 12, height: 12, borderRadius: 3, borderWidth: 2 },
+  toggleOn: { borderColor: COLORS.ok, backgroundColor: 'rgba(74,222,128,0.25)' },
+  toggleOff: { borderColor: '#71717a' },
   list: { width: 260, padding: 10, gap: 8, borderRadius: 12, backgroundColor: 'rgba(17,17,20,0.92)' },
   row: { gap: 2 },
   rowTitle: { color: '#fafafa', fontSize: 12, fontWeight: '600' },

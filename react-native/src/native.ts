@@ -27,7 +27,7 @@ import type {
   InspectorOverrides,
 } from '../../protocol/inspector'
 // Imported, not required at runtime: the build rewrites a runtime require into one Metro cannot resolve.
-import { AccessibilityInfo, AppState, Dimensions, Keyboard, NativeModules, Platform, TurboModuleRegistry } from 'react-native'
+import { AccessibilityInfo, AppState, Dimensions, Keyboard, NativeModules, PixelRatio, Platform, TurboModuleRegistry } from 'react-native'
 import { scheduleOnRN, scheduleOnUI } from 'react-native-worklets'
 import {
   connectInspector as connectCore,
@@ -49,8 +49,10 @@ export { registerReplay } from './client'
 export { fire, press, registerScenario, waitForTestId } from './scenarios'
 export { isInstrumented } from './runtime'
 
-// The runtime reads the OS for what only one platform pays for (a shadow without a path on iOS).
+// The runtime reads the OS for what only one platform pays for (a shadow without a path on iOS), and
+// the pixel scale for how many pixels an image is drawn at.
 ;(globalThis as { __KF_OS__?: string }).__KF_OS__ = Platform.OS
+;(globalThis as { __KF_SCALE__?: number }).__KF_SCALE__ = PixelRatio.get()
 
 type UiGlobal = {
   __KF_INSPECTOR__?: unknown
@@ -475,10 +477,16 @@ export type GestureReport = {
   y: number | null
   /** Wall clock (Date.now) when the callback ran: the same on both threads. */
   at: number
+  /** onEnd and onFinalize: whether it succeeded, and whether it had activated (null where the event does not say). */
+  success: boolean | null
+  activated: boolean | null
 }
 
 type GestureEvent = {
   handlerTag?: number
+  /** react-native-gesture-handler's State: 1 failed, 2 began, 3 cancelled, 4 active, 5 end. */
+  state?: number
+  oldState?: number
   absoluteX?: number
   absoluteY?: number
   changedTouches?: Array<{ absoluteX?: number; absoluteY?: number }>
@@ -495,17 +503,34 @@ function fingerOf(e: GestureEvent | undefined): [number | null, number | null] {
   return [null, null]
 }
 
+const STATE_ACTIVE = 4
+const STATE_END = 5
+
+/**
+ * How an ending callback says the gesture went: onEnd and onFinalize get `success` as their second
+ * argument (else the event's state is END), and onFinalize's event says whether it had been active
+ * (onEnd only runs after an activation). [null, null] for the other callbacks.
+ */
+function outcomeOf(on: string, e: GestureEvent | undefined, success: unknown): [boolean | null, boolean | null] {
+  'worklet'
+  if (on !== 'onEnd' && on !== 'onFinalize') return [null, null]
+  const ok = typeof success === 'boolean' ? success : e && typeof e.state === 'number' ? e.state === STATE_END : null
+  const activated = on === 'onEnd' ? true : e && typeof e.oldState === 'number' ? e.oldState === STATE_ACTIVE : null
+  return [ok, activated]
+}
+
 const gestureListeners = new Set<(r: GestureReport) => void>()
-const gestureFanOut = (site: InspectorGestureSite, handler: number, x: number | null, y: number | null, at: number) => {
-  for (const l of gestureListeners) l({ site, handler, x, y, at })
+const gestureFanOut = (site: InspectorGestureSite, handler: number, x: number | null, y: number | null, at: number, success: boolean | null, activated: boolean | null) => {
+  for (const l of gestureListeners) l({ site, handler, x, y, at, success, activated })
 }
 
 function installGestureHook(on: boolean) {
   const g = globalThis as { __KF_GESTURE__?: unknown }
   if (on) {
-    g.__KF_GESTURE__ = (site: InspectorGestureSite, e: GestureEvent | undefined) => {
+    g.__KF_GESTURE__ = (site: InspectorGestureSite, e: GestureEvent | undefined, success: unknown) => {
       const [x, y] = fingerOf(e)
-      gestureFanOut(site, e?.handlerTag ?? -1, x, y, Date.now())
+      const [ok, activated] = outcomeOf(site.on, e, success)
+      gestureFanOut(site, e?.handlerTag ?? -1, x, y, Date.now(), ok, activated)
     }
   } else delete g.__KF_GESTURE__
   scheduleOnUI((start: boolean) => {
@@ -515,10 +540,11 @@ function installGestureHook(on: boolean) {
       delete ui.__KF_GESTURE__
       return
     }
-    ui.__KF_GESTURE__ = (site: InspectorGestureSite, e: GestureEvent | undefined) => {
+    ui.__KF_GESTURE__ = (site: InspectorGestureSite, e: GestureEvent | undefined, success: unknown) => {
       'worklet'
       const [x, y] = fingerOf(e)
-      scheduleOnRN(gestureFanOut, site, e?.handlerTag ?? -1, x, y, Date.now())
+      const [ok, activated] = outcomeOf(site.on, e, success)
+      scheduleOnRN(gestureFanOut, site, e?.handlerTag ?? -1, x, y, Date.now(), ok, activated)
     }
   }, on)
 }
@@ -719,6 +745,8 @@ export function markersWhileRecording(elapsed: () => number, onMarker: (m: Inspe
             y: g.y === null ? null : Math.round(g.y),
             site: `${g.site.file}:${g.site.line}`,
             component: g.site.component,
+            ...(g.success === null ? {} : { success: g.success }),
+            ...(g.activated === null ? {} : { activated: g.activated }),
           })
         })
   // Values on a screen that another one covers: a stack keeps the screens below mounted, and what

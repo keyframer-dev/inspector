@@ -16,7 +16,9 @@ It works with React Native, Flutter, iOS (UIKit and SwiftUI) and Android (Views 
 | I want to | Read |
 |---|---|
 | Know what it does and how | [Overview](introduction/overview.md), [How it works](introduction/how-it-works.md) |
-| Add it to a React Native or Expo app | [React Native and Expo](getting-started/react-native.md) |
+| Install it, on any platform | [Installation](getting-started/index.md) |
+| Set it up in a React Native or Expo app with one command | [@keyframerdev/wizard](getting-started/wizard.md) |
+| Add it to a React Native or Expo app by hand | [React Native and Expo](getting-started/react-native.md) |
 | Add it to an iOS app | [iOS](getting-started/ios.md) |
 | Add it to an Android app | [Android](getting-started/android.md) |
 | Add it to a Flutter app | [Flutter](getting-started/flutter.md) |

@@ -1,0 +1,21 @@
+{
+  "name": "BareApp",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "start": "react-native start"
+  },
+  "dependencies": {
+    "react": "19.2.3",
+    "react-native": "0.86.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@react-native/babel-preset": "0.86.2",
+    "@react-native/typescript-config": "0.86.2",
+    "@types/react": "^19.2.0",
+    "typescript": "^6.0.3"
+  }
+}

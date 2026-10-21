@@ -11,6 +11,22 @@ section: Motion Vitals
 
 You need Reanimated 4 with `react-native-worklets`. It works in Expo apps, Expo Go included: JavaScript only, no native module, no config plugin.
 
+## Set up with the wizard
+
+In your app's folder:
+
+```sh
+npx @keyframerdev/wizard --products vitals
+```
+
+It finds your project's field key (sign in through the browser, or paste it), installs the package, adds the Babel plugin, starts the reporter with your navigation ref so screens are named, and waits for the first session. Every change is shown as a diff before it is written. With the key already in hand, it asks nothing:
+
+```sh
+npx @keyframerdev/wizard --yes --products vitals --key kfp_live_7Hq2xR…
+```
+
+[@keyframerdev/wizard](../getting-started/wizard.md) has every step, option and message. The steps below are what it does, by hand.
+
 ## 1. Install
 
 ```sh

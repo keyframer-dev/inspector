@@ -159,6 +159,39 @@ export type InspectorAccessibility = { reduceMotion: boolean }
 export type InspectorRenderHint = { id: string; hint: string; detail?: string }
 
 /**
+ * A worklet mistake that crashes a React Native app on the UI thread, found in the code by the Babel
+ * plugin before it runs, or (`error`) seen when it crashed anyway.
+ *
+ * - `declared-after`: the worklet uses a function or value declared further down the same scope. A
+ *   worklet captures what it uses when it is created, so it gets nothing (a function declaration that
+ *   is a worklet is no longer hoisted: the worklets plugin turns it into a constant).
+ * - `js-call`: the worklet calls a function that is not a worklet (a state setter, navigation, a
+ *   callback prop, a plain function), which throws "Tried to synchronously call a Remote Function"
+ *   (a "non-worklet function" in Reanimated 3).
+ *
+ * `message` and `fix` are written by the analysis, so every reader shows the same words. `file` is null
+ * for a crash the inspector could not place. Sent once per finding, like render hints.
+ */
+export type InspectorWorkletIssue = {
+  /** Stable across reloads: `issue:file:line:column:name`. */
+  id: string
+  issue: 'declared-after' | 'js-call'
+  message: string
+  fix: string
+  /** Where the function or value is used (null: not known). */
+  file: string | null
+  line: number
+  column: number
+  /** What is at fault: `update`, `setOpen`, `navigation.navigate`. */
+  name: string
+  /** The worklet it is in: `file:line` (what UI work is timed under), what makes it one ("useAnimatedStyle", "Pan.onUpdate", "scheduleOnUI", "'worklet'"), and its name. */
+  worklet: { site: string; kind: string; name: string | null } | null
+  /** Seen at runtime: the error's message (and stack), sent before the red box. */
+  error?: string
+  stack?: string
+}
+
+/**
  * How the app was built. A debug build runs extra checks (React Native's dev mode, Flutter's JIT and
  * asserts, unoptimized native code), so its frames are slower than a release build's: the problems
  * are real, the numbers are inflated.
@@ -203,6 +236,8 @@ export type InspectorEvent =
   | { kind: 'style'; site: InspectorStyleSite }
   /** See InspectorRenderHint. Sent once per view and hint, when the SDK first sees it. */
   | ({ kind: 'renderHint' } & InspectorRenderHint)
+  /** See InspectorWorkletIssue (React Native). Readers that do not know it skip it. */
+  | ({ kind: 'workletIssue' } & InspectorWorkletIssue)
 
 // ─── Live inspector protocol ────────────────────────────────────────────────────
 // Three parties meet in one pairing room (a Durable Object on the API, joined with a short code):
@@ -283,9 +318,13 @@ export type InspectorMarker =
   | { kind: 'note'; t: number; text: string }
   /**
    * A react-native-gesture-handler callback ran (the Babel plugin wraps them): which gesture, which
-   * callback, where the finger was on screen. Touches the gesture took over continue here.
+   * callback, where the finger was on screen. Touches the gesture took over continue here. `handler` is
+   * the gesture's handler tag, and every callback of one `Gesture.Pan()…` chain has the same `site`.
+   * onEnd and onFinalize also say how it ended, when the event does: `success` (the callback's second
+   * argument: false when it failed or another gesture cancelled it) and `activated` (it had become
+   * active before it ended; false for one that began and never started).
    */
-  | { kind: 'gesture'; t: number; gesture: string; on: string; handler: number; x: number | null; y: number | null; site: string; component: string | null }
+  | { kind: 'gesture'; t: number; gesture: string; on: string; handler: number; x: number | null; y: number | null; site: string; component: string | null; success?: boolean; activated?: boolean }
   /** The person's motion settings changed while recording (see InspectorAccessibility). */
   | { kind: 'accessibility'; t: number; reduceMotion: boolean }
   /** The refresh rate changed while recording: low power mode, ProMotion dropping to 60 Hz. */

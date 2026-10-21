@@ -163,7 +163,7 @@ iOS and Android do not measure a frame thread, so `ui` says nothing about those 
 - none: [reduce-motion, unseen, two-writers]
 ```
 
-A problem kind, or a list of them: `js-task`, `render-storm`, `slow-render`, `ui-work`, `busy-start`, `burst`, `layout-anim`, `js-unknown`, `screen-mount`, `ui-unknown`, `error`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump`, `render-hint`. See [Problems](../problems/index.md).
+A problem kind, or a list of them: `js-task`, `render-storm`, `slow-render`, `ui-work`, `busy-start`, `burst`, `layout-anim`, `js-unknown`, `screen-mount`, `ui-unknown`, `error`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump`, `render-hint`, `gesture-lost`, `gesture-cancelled`, `gesture-steals-scroll`. See [Problems](../problems/index.md).
 
 ## Limits and amounts
 

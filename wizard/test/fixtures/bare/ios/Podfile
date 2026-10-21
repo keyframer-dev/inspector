@@ -1,0 +1,2 @@
+# native: the wizard never touches this folder
+platform :ios, min_ios_version_supported

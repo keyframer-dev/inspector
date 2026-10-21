@@ -1,0 +1,20 @@
+{
+  "name": "mobile",
+  "version": "1.2.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@acme/ui": "workspace:*",
+    "expo": "~57.0.10",
+    "expo-constants": "~57.0.21",
+    "expo-router": "~57.0.10",
+    "react": "19.2.3",
+    "react-native": "0.86.2",
+    "react-native-reanimated": "~4.5.1",
+    "react-native-worklets": "0.10.1"
+  },
+  "devDependencies": {
+    "babel-preset-expo": "^57.0.14",
+    "typescript": "~6.0.3"
+  },
+  "private": true
+}

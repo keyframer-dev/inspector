@@ -48,6 +48,8 @@ The problem's own `fix` text is the primary guide. The patterns behind it:
 | `two-writers` | Give the value one owner: one handler, one controller, one property animator, one `Animatable`; or cancel the running animation first |
 | `jump` | Continue from the current value and velocity: do not reset `.value` or the controller before animating; pass the gesture's velocity to the spring; `.beginFromCurrentState`; `animateTo` on one remembered `Animatable` |
 | `render-hint` | By hint: `shadow-path` gives the shadow a shape; `mask`/`blur` keep them off moving content; `group-opacity`/`layer-alpha` animate children or use a hardware layer; `elevation` keeps elevation fixed and animates a transform; `opacity-widget` uses `FadeTransition`; `save-layer` uses `Clip.antiAlias`; `rasterize` turns rasterizing off while it animates |
+| `gesture-lost`, `gesture-steals-scroll` | Give the gesture and the list their own directions (`activeOffsetX([-10, 10])` with `failOffsetY([-5, 5])` in a vertical list); use the `ScrollView`/`FlatList` from react-native-gesture-handler with `simultaneousWithExternalGesture`, `requireExternalGestureToFail` or `blocksExternalGesture` |
+| `gesture-cancelled` | Relate the two gestures: `simultaneousWithExternalGesture` to run both, `requireExternalGestureToFail` or `blocksExternalGesture` for one to wait; offsets keep the other off this one's drags |
 | `error`, `warning` | Fix the logged error first: it may stop an animation from finishing |
 
 Rules:

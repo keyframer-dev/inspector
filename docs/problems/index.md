@@ -20,7 +20,7 @@ A recording is read as the few things to fix, most costly first. The panel's **P
 | Severity | When |
 |---|---|
 | High | An error, or 10 or more frames lost (counted as 60 Hz frames), or one block of 100 ms or more |
-| Medium | 3 or more frames lost, or a block of 40 ms or more, or any of: `render-storm`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump` |
+| Medium | 3 or more frames lost, or a block of 40 ms or more, or any of: `render-storm`, `warning`, `reduce-motion`, `unseen`, `two-writers`, `jump`, `gesture-lost`, `gesture-cancelled`, `gesture-steals-scroll` |
 | Low | Everything else |
 
 Frames lost count as 60 Hz frames for severity, so the same hitch is as severe on a 120 Hz screen, where it loses twice as many.
@@ -47,6 +47,9 @@ Use these names in a check file's `none:` list.
 | `two-writers` | Two animations write one value at once | [Motion bugs](motion.md#two-writers) |
 | `jump` | An interrupted animation jumps instead of continuing | [Motion bugs](motion.md#jump) |
 | `render-hint` | A moving view is drawn in a costly way | [Render hints](render-hints.md) |
+| `gesture-lost` | A gesture keeps losing the touch to a scrolling list or another gesture | [Motion bugs](motion.md#lost-gesture) |
+| `gesture-cancelled` | An active gesture is cancelled as another one activates | [Motion bugs](motion.md#cancelled-gesture) |
+| `gesture-steals-scroll` | A gesture takes drags that belong to a list | [Motion bugs](motion.md#stolen-scroll) |
 
 ## Read a problem
 

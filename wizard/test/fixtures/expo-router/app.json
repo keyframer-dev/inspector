@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Tabs App",
+    "slug": "tabs-app",
+    "version": "1.0.0",
+    "scheme": "tabsapp",
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

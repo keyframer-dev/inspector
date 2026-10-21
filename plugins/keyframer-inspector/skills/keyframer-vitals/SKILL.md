@@ -22,6 +22,19 @@ Ask before choosing when reporting starts. By default it starts at `start`, like
 
 ## 2a. React Native and Expo
 
+First choice: the setup wizard, without questions, with the field key the person gave you. It installs the package, adds the Babel plugin and starts the reporter with the navigation ref, so screens are named:
+
+```sh
+npx @keyframerdev/wizard --yes --products vitals --key kfp_live_… --skip-verify --no-agents
+```
+
+- Run it from the app's folder (in a monorepo, `--root apps/mobile`). `--dry-run` shows the changes without writing them.
+- Without a key, the person can let the wizard find it: `--auth browser` opens keyframer.dev to approve a sign-in, then it picks or creates the project. Only use it when the person is at the browser.
+- It writes the key into the start file: the field key is public, that is fine. Never pass a `kft_` or `kfw_` key.
+- If the package can't be found or the wizard fails, set it up by hand below.
+
+By hand:
+
 ```sh
 npm i @keyframerdev/vitals
 ```

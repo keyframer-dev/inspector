@@ -34,6 +34,33 @@ export function springSettleMs(c: Record<string, unknown>): number {
 }
 
 /**
+ * Whether an animation call never ends on its own: withRepeat(…, -1 or 0), or one wrapping it (withDelay,
+ * withSequence, withClamp), or an infinite CSS animation. Its estimated run time is only a first guess.
+ */
+export function isEndless(ev: AnimEvent, byEid: (eid: number) => AnimEvent | undefined, depth = 0): boolean {
+  if (depth > 12) return false
+  const inner = (a: unknown) => {
+    if (!isRef(a)) return false
+    const e = byEid(a.$anim)
+    return e ? isEndless(e, byEid, depth + 1) : false
+  }
+  const [a0, a1] = ev.args
+  switch (ev.site.fn) {
+    case 'withRepeat':
+      return num(a1, 2) <= 0 || inner(a0)
+    case 'withDelay':
+    case 'withClamp':
+      return inner(a1)
+    case 'withSequence':
+      return ev.args.some(inner)
+    case 'CSS animation':
+      return cfg(a0).iterationCount === 'infinite'
+    default:
+      return false
+  }
+}
+
+/**
  * Estimated run time of one animation call (ms). Nested animations are read through their ids
  * (`withDelay(200, withTiming(…))` reports the inner call as `{ $anim: id }`); one forwarded from the UI
  * thread has lost its nesting, and falls back to a short default.
@@ -103,7 +130,7 @@ export type SiteStats = {
   worstFrameMs: number
 }
 
-type Window = { ev: AnimEvent; start: number; end: number; dropped: number }
+type Window = { ev: AnimEvent; start: number; end: number; dropped: number; endless: boolean }
 
 export type Outline = { styleId: string; siteId: string; dropped: number; live: boolean; age: number }
 
@@ -126,7 +153,7 @@ export class MotionTracker {
     // a later call refers to it.
     for (const a of ev.args) if (isRef(a)) this.windows = this.windows.filter((w) => w.ev.eid !== a.$anim)
     const ms = estimateMs(ev, (id) => this.events.get(id))
-    this.windows.push({ ev, start: now, end: now + ms, dropped: 0 })
+    this.windows.push({ ev, start: now, end: now + ms, dropped: 0, endless: isEndless(ev, (id) => this.events.get(id)) })
     if (this.windows.length > 400) this.windows.splice(0, this.windows.length - 400)
     if (this.events.size > 2000) {
       const keep = new Set(this.windows.map((w) => w.ev.eid))
@@ -166,6 +193,17 @@ export class MotionTracker {
       else if (!site.target && sameComponent) out.push(st)
     }
     return out
+  }
+
+  /**
+   * Endless loops have no end to estimate: each stays open while the value it writes keeps changing.
+   * `moving(site)` says whether the value that call writes changed since it was last asked; a loop that
+   * stopped (cancelAnimation, its screen gone) is let go, and its outline fades.
+   */
+  keepEndless(now: number, moving: (site: InspectorCallSite) => boolean): void {
+    for (const w of this.windows) {
+      if (w.endless && w.ev.site.target && now > w.end - 300 && moving(w.ev.site)) w.end = now + 600
+    }
   }
 
   /**
