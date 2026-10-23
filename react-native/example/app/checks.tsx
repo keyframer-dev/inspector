@@ -73,7 +73,7 @@ function Tug() {
   useAnimatedReaction(
     () => kick.value,
     (now, previous) => {
-      if (previous !== null && now !== previous) x.value = withSpring(0, { damping: 6 })
+      if (previous !== null && now !== previous) x.value = withSpring(0, { damping: 6, mass: 4 })
     },
   )
   const style = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }))

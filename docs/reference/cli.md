@@ -18,6 +18,7 @@ npx keyframer-inspect <command> [options]
 | `keyframer-inspect mcp` | The MCP server |
 | `keyframer-inspect ci` | Runs scenarios and check files against a baseline |
 | `keyframer-inspect fix` | The fix loop with Claude Code, Codex or another agent |
+| `keyframer-inspect lint` | Worklet crashes and motion mistakes in React Native code, without running the app |
 | `keyframer-inspect symbolicate <file> --map <map>` | Maps a preview build's raw stacks to source lines |
 | `keyframer-inspect --code <code>` | Joins a pairing room and writes the Keyframer editor's edits to disk |
 
@@ -103,6 +104,28 @@ npx keyframer-inspect fix --agent claude --scenario "sheet: open" --max-rounds 3
 | `--settle MS` | 800 | Keep recording after each run |
 
 Exit codes: 0 done, 1 not done, 2 a setup error.
+
+## keyframer-inspect lint
+
+The [static checks](../problems/static-checks.md) the Babel plugin runs, over a React Native project's source, without running it. For coding agents and CI.
+
+```sh
+npx keyframer-inspect lint [paths…] [--root .] [--json] [--severity info] [--fail-on error]
+```
+
+| Flag | Default | |
+|---|---|---|
+| `paths` | the whole root | Files or folders under the root |
+| `--root <dir>` | `.` | The project root: paths in findings are relative to it, and the installed Reanimated and React Compiler are read from it |
+| `--json` | | `{ files, unreadable, issues, motion }`: `issues` are the worklet crashes, `motion` the motion findings |
+| `--severity info, warning or error` | `info` | The least severe motion finding listed |
+| `--fail-on error, warning or info` | `error` | The least severe motion finding that fails the run |
+
+`node_modules`, build output and native folders are skipped, and so are files that touch none of Reanimated, worklets, Gesture Handler or the React Native APIs the checks read.
+
+Exit codes: 0 nothing to fail on, 1 a worklet crash or a motion finding at `--fail-on` or above, 2 bad arguments.
+
+The MCP server has the same as a tool, `lint_project` (see [MCP server](../agents/mcp-server.md#static-checks)).
 
 ## keyframer-inspect symbolicate
 

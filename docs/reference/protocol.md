@@ -63,8 +63,8 @@ Every SDK speaks one protocol, defined in [`protocol/inspector.ts`](https://gith
 | Message | |
 |---|---|
 | `hello` | What the app is (above) |
-| `events` | `anim` (an animation started, with its call site, `args`, `thread`, and while recording `t`, `stack` or `frames`, `durationMs`), `signal` (a value registered), `unsignal` (a value went away), `style`, `renderHint` |
-| `samples` | Values over time (`{ id, t, v }`), and while recording `frames`, `drops`, `commits`, `markers`, `tasks`, `work` |
+| `events` | `anim` (an animation started, with its call site, `args`, `thread`, and while recording `t`, `stack` or `frames`, `durationMs`), `signal` (a value registered), `unsignal` (a value went away), `style` (its `links` may carry `id`, the call site of a value passed in as a prop), `renderHint` |
+| `samples` | Values over time (`{ id, t, v }`), and while recording `frames`, `drops`, `commits`, `markers`, `tasks`, `work`. `work` rows of kind `hop` count a worklet's calls to the JS thread (`calls` in that frame, `ms` 0). Optional `tracking`: what animates now (`InspectorMotionTracking`: `screen`, `windowMs`, `frames`, `inventory`, `values`, `styles`, `drivers`, `cells`, `restarts`, `churn`), every few seconds while an editor is in the room, recording or not |
 | `scenarios` | The registered scenarios changed |
 | `scenarioDone` | A scenario an editor asked for finished, or failed with `error` |
 | `recording` | A recording made on the device |

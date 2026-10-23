@@ -18,8 +18,8 @@ function Tile({ color, index }: { color: string; index: number }) {
       press.value = withTiming(0.94, { duration: 450 })
     })
     .onStart(() => {
-      press.value = withSpring(1, { damping: 12 })
-      lift.value = withSpring(1, { damping: 14, stiffness: 180 })
+      press.value = withSpring(1, { damping: 12, mass: 4 })
+      lift.value = withSpring(1, { damping: 14, stiffness: 180, mass: 4 })
     })
     .onFinalize(() => {
       press.value = withSpring(1)

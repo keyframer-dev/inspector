@@ -18,6 +18,8 @@
  *   - `time` runs the app's animations slower, pauses or steps them, where a bridge can (React Native's
  *     UI thread), and is answered with the speed now. A connection that ends, or loses its last
  *     editor, puts the speed back to normal.
+ *   - While an editor is in the room, what animates now (trackingRuntime.ts: what is mounted, restarts,
+ *     remounts, the cost per list cell) goes with `samples` every `trackingMs`.
  *
  * Pure TypeScript with the socket and timers injected, so it runs under vitest. React Native apps
  * import `connectInspector` from '@keyframerdev/inspector/native', which adds the UI-thread hook.
@@ -37,6 +39,7 @@ import type {
   InspectorFrameDrop,
   InspectorFrameStat,
   InspectorMarker,
+  InspectorMotionTracking,
   InspectorOverrides,
   InspectorPresenceMessage,
   InspectorRoute,
@@ -66,6 +69,7 @@ import { PROTOCOL, SDK } from './version'
 import { runScenario, scenarioNames, watchScenarios } from './scenarios'
 import { watchTasks } from './tasks'
 import { captureStack } from './stack'
+import { holdTracking, type TrackingHandle } from './trackingRuntime'
 
 export { captureStack } from './stack'
 
@@ -144,6 +148,8 @@ export type ConnectInspectorOptions = {
   /** Defaults to the global WebSocket. */
   WebSocket?: SocketConstructor
   batchMs?: number
+  /** How often what animates now (`samples.tracking`) goes to the editors while any is in the room, ms. 0: never. Default 2000. */
+  trackingMs?: number
   sampleMs?: number
   now?: () => number
   /** Schedules the JS frame loop measured while recording. Defaults to the global requestAnimationFrame. */
@@ -415,7 +421,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       sendRaw({ type: 'events', events: queue })
       queue = []
     }
-    if (samples.length || frames.length || drops.length || commits.length || markers.length || tasks.length || work.length) {
+    if (samples.length || frames.length || drops.length || commits.length || markers.length || tasks.length || work.length || trackingDue) {
       sendRaw({
         type: 'samples',
         samples,
@@ -425,7 +431,9 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         ...(markers.length ? { markers } : {}),
         ...(tasks.length ? { tasks } : {}),
         ...(work.length ? { work } : {}),
+        ...(trackingDue ? { tracking: trackingDue } : {}),
       })
+      trackingDue = null
       samples = []
       frames = []
       drops = []
@@ -436,6 +444,35 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
     }
   }
   const flushTimer = setInterval(flush, batchMs)
+
+  // ── What animates now, for the editors in the room ─────────────────────
+  // Held while any editor is in the room (presence): its summary goes with the next flush every
+  // trackingMs, and UI work is sampled for the cost per list cell where a bridge can watch it.
+  const trackingMs = opts.trackingMs ?? 2000
+  let tracking: TrackingHandle | null = null
+  let trackingTimer: ReturnType<typeof setInterval> | null = null
+  let trackingDue: InspectorMotionTracking | null = null
+  const followTracking = (on: boolean) => {
+    if (on && !tracking && trackingMs > 0 && !disposed) {
+      const watchWork = bridges.find((b) => b.watchWork)?.watchWork
+      tracking = holdTracking({ ...(watchWork ? { watchWork: (onRows) => watchWork(onRows) } : {}), hz: () => said.display?.hz ?? 0 })
+      tracking.sampleWork(true)
+      const t = tracking
+      trackingTimer = setInterval(() => {
+        try {
+          trackingDue = t.summary()
+        } catch {
+          // What the app has mounted could not be read this time: the next one will be.
+        }
+      }, trackingMs)
+    } else if (!on && tracking) {
+      tracking.release()
+      tracking = null
+      if (trackingTimer) clearInterval(trackingTimer)
+      trackingTimer = null
+      trackingDue = null
+    }
+  }
   const connection: Connection = {
     send(msg) {
       if (!socket || socket.readyState !== OPEN) return false
@@ -857,6 +894,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
           stopRecorders()
         }
         editors = msg.editors
+        followTracking(editors > 0)
         break
     }
   }
@@ -982,6 +1020,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   return () => {
     disposed = true
     normalSpeed()
+    followTracking(false)
     if (live.__KF_CONNECTION__ === connection) delete live.__KF_CONNECTION__
     unwatchScenarios()
     clearInterval(flushTimer)

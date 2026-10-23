@@ -47,7 +47,7 @@ What each SDK can see: iOS reports `detached`, `hidden` and `offscreen` (not `co
 
 ### Two writers
 
-Kind: `two-writers`. Another call site animated a value while an animation of it was still running. `withDelay(..., withTiming(...))` is one write, and the same call starting again is a restart, not a second writer.
+Kind: `two-writers`. Another call site animated a value while an animation of it was still running. `withDelay(..., withTiming(...))` is one write, and the same call starting again is a restart, not a second writer. A spring counts as running while it visibly moves: until it stays within 2% of the distance it started from (a bare `withSpring`, Gentle, for 400 ms of its 833). One taken over in that last 2%, its energy tail, does not jump, so it is not a clash.
 
 - **React Native:** Assigning to a shared value cancels the animation running on it, so the last writer wins and the motion restarts from wherever it was. Give the value one owner: drive both from one place (one handler, or a `useAnimatedReaction`), or `cancelAnimation` and hand over on purpose.
 - **Flutter:** Give the property one `AnimationController` and `animateTo` from its current value, or stop the other one first.

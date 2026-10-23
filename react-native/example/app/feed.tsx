@@ -48,7 +48,7 @@ function Row({ index, title, body, slow }: { index: number; title: string; body:
         hitSlop={12}
         onPress={() => {
           setLiked((l) => !l)
-          heart.set(withSequence(withTiming(1.5, { duration: 110 }), withSpring(1, { damping: 6 })))
+          heart.set(withSequence(withTiming(1.5, { duration: 110 }), withSpring(1, { damping: 6, mass: 4 })))
         }}
       >
         <Animated.Text style={[styles.heart, heartStyle, liked && { color: colors.red }]}>{liked ? '♥' : '♡'}</Animated.Text>

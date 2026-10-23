@@ -23,7 +23,7 @@ export default function Form() {
       return
     }
     setDone(true)
-    check.set(withSpring(1, { damping: 10, stiffness: 160 }))
+    check.set(withSpring(1, { damping: 10, stiffness: 160, mass: 4 }))
   }
 
   return (

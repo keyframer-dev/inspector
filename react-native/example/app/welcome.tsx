@@ -12,7 +12,7 @@ function WelcomeHero() {
   const cardOpacity = useSharedValue(0)
 
   useEffect(() => {
-    logoScale.value = withSpring(1, { damping: 20, stiffness: 180 })
+    logoScale.value = withSpring(1, { damping: 20, stiffness: 180, mass: 4 })
     cardY.value = withDelay(150, withTiming(0, { duration: 420 }))
     cardOpacity.value = withDelay(150, withTiming(1, { duration: 300 }))
   }, [logoScale, cardY, cardOpacity])
@@ -54,7 +54,7 @@ function SwipeCard() {
       dragX.value += e.changeX
     })
     .onEnd(() => {
-      dragX.value = withSpring(0, { damping: 14, stiffness: 160 })
+      dragX.value = withSpring(0, { damping: 14, stiffness: 160, mass: 4 })
     })
   const style = useAnimatedStyle(() => ({
     transform: [{ translateX: dragX.value }, { rotate: `${dragX.value / 20}deg` }],
@@ -71,7 +71,7 @@ function SwipeCard() {
 function NotificationBadge() {
   const badge = useSharedValue(0)
   useEffect(() => {
-    badge.value = withDelay(400, withSequence(withTiming(1.2, { duration: 630 }), withSpring(1.33, { damping: 11 })))
+    badge.value = withDelay(400, withSequence(withTiming(1.2, { duration: 630 }), withSpring(1.33, { damping: 11, mass: 4 })))
   }, [badge])
   const style = useAnimatedStyle(() => ({ transform: [{ scale: badge.value }] }))
   return (

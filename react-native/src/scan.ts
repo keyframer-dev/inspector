@@ -23,6 +23,11 @@
  * Frames are counted on the UI thread (Reanimated's frame callback) and on the JS thread
  * (requestAnimationFrame). A frame that took 2.5 refresh intervals dropped 2 frames, and those frames
  * are charged to every animation running at that moment.
+ *
+ * The list under the pill also says what animates now (tracking.ts): animated styles and shared values
+ * mounted on the screen, what each value drives, restarts per frame, rows that remount, and, while the
+ * list is open, the cost per list cell (UI work sampled a second in ten). A restart storm or rows that
+ * remount put a word on the pill.
  */
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -31,11 +36,14 @@ import Animated, { useAnimatedStyle, useFrameCallback, useSharedValue, type Shar
 import { scheduleOnRN } from 'react-native-worklets'
 import { setCaptureRoot } from './capture'
 import { MotionTracker, droppedFrames, frameIntervalOf } from './motionStats'
-import { currentRefreshRate, noteDisplay, uiThreadBridge, watchDisplay } from './native'
+import { currentRefreshRate, noteDisplay, uiThreadBridge, watchDisplay, watchUiWork } from './native'
 import { createDisplayMeter, frameBudget, tickDisplayMeter, type DisplayMeter } from './display'
 import { configureRecorder, isRecording, recordingElapsed, recordTouches, startRecording, stopRecording, watchRecording, watchSaved, type RecorderConfig } from './record'
 import { realFrameTime } from './clock'
 import { createInspector, getLayoutNode, getLayouts, isCapturing, isInspectorInstalled, remeasureLayouts, tapInspector, targetValues, tapTimeScale, timeScale, watchCapturing, watchLayouts } from './runtime'
+import type { InspectorMotionTracking } from '../../protocol/inspector'
+import { trackingLines } from './tracking'
+import { holdTracking, type TrackingHandle } from './trackingRuntime'
 
 export { isInstrumented } from './runtime'
 
@@ -71,7 +79,7 @@ const CORNERS = {
   'bottom-left': { bottom: 40, left: 10, alignItems: 'flex-start', flexDirection: 'column-reverse' },
 } as const
 
-type Session = { tracker: MotionTracker; refs: number; stop: () => void }
+type Session = { tracker: MotionTracker; tracking: TrackingHandle; refs: number; stop: () => void }
 let session: Session | null = null
 
 /** One listening session per app, shared by every MotionScan mounted. Starts synchronously. */
@@ -93,11 +101,15 @@ function acquire(): Session {
   }
   watchLayouts(true)
   const untap = tapInspector((ev) => tracker.onEvent(ev, Date.now()))
+  // What animates now: UI work for the cost per cell comes from the UI thread's frame loop (none on web).
+  const tracking = holdTracking({ ...(Platform.OS === 'web' ? {} : { watchWork: watchUiWork }), hz: currentRefreshRate })
   session = {
     tracker,
+    tracking,
     refs: 1,
     stop: () => {
       untap()
+      tracking.release()
       watchLayouts(false)
       uninstall?.()
     },
@@ -113,6 +125,17 @@ function release(s: Session) {
 }
 
 const COLORS = { ok: '#4ade80', warn: '#fbbf24', bad: '#f43f5e' }
+
+/** Starts a frame at one call site past which several views restart it together (issues.ts restart-storm). */
+const STORM_PER_FRAME = 3
+
+/** A word on the pill for what tracking found: views restarting an animation every frame, or rows that remount. */
+function motionWord(t: InspectorMotionTracking | null): string | null {
+  if (!t) return null
+  if (t.restarts.some((r) => r.perFrame > STORM_PER_FRAME)) return 'restarts'
+  if (t.churn.some((c) => c.claimed >= 6 && c.claimed >= 3 * Math.max(1, c.instances))) return 'remounts'
+  return null
+}
 
 /** Outlines drawn at once; past this the least recent are left out. */
 const MAX_OUTLINES = 32
@@ -217,7 +240,8 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
     sessionRef.current?.tracker.onDrop(uiTs + clock.current, frames, dt)
   }
   const clock = useRef(Number.POSITIVE_INFINITY)
-  const onUiRate = (fps: number, minDt: number, maxDt: number) => {
+  const onUiRate = (fps: number, minDt: number, maxDt: number, frames: number) => {
+    sessionRef.current?.tracking.noteFrames(frames)
     setRates((r) => (r.ui === fps && r.dropped === totals.current.dropped ? r : { ...r, ui: fps, dropped: totals.current.dropped }))
     if (debug) setGaps({ min: Math.round(minDt * 10) / 10, max: Math.round(maxDt * 10) / 10 })
   }
@@ -258,7 +282,7 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
       uiInterval.value = uiFast.value * 2 > n ? 1000 / 120 : (uiFast.value + uiMid.value) * 2 > n ? 1000 / 90 : 1000 / 60
       uiFast.value = 0
       uiMid.value = 0
-      scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value)
+      scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value, uiFrames.value)
       uiFrames.value = 0
       uiWindowStart.value = ts
       uiMinDt.value = 1000
@@ -303,6 +327,28 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)
   }, [enabled])
+
+  // What animates now: read every 2 s (a second while the list is open, which also samples UI work for
+  // the cost per cell). Reading walks the mounted values and styles; nothing runs per frame.
+  const [motionNow, setMotionNow] = useState<InspectorMotionTracking | null>(null)
+  useEffect(() => {
+    const tracking = sessionRef.current?.tracking
+    if (!enabled || !tracking) return
+    tracking.sampleWork(open)
+    const read = () => {
+      try {
+        setMotionNow(tracking.summary())
+      } catch {
+        // Read again next time.
+      }
+    }
+    read()
+    const id = setInterval(read, open ? 1000 : 2000)
+    return () => {
+      clearInterval(id)
+      tracking.sampleWork(false)
+    }
+  }, [enabled, open])
 
   // Redraw the outlines a few times a second, and only while there is something to outline (or one just
   // faded out): an idle scan commits nothing, so it costs the UI thread no frames of its own.
@@ -469,6 +515,7 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
           h(Text, { style: [styles.pillText, { color: rates.dropped ? COLORS.warn : '#a1a1aa' }] }, `${rates.dropped} dropped`),
           debug ? h(Text, { style: [styles.pillText, { color: '#a1a1aa' }] }, `${gaps.min}–${gaps.max}ms`) : null,
           speed !== 1 ? h(Text, { style: [styles.pillText, { color: COLORS.warn }] }, speed === 0 ? 'Paused' : `${speed}×`) : null,
+          motionWord(motionNow) ? h(Text, { style: [styles.pillText, { color: COLORS.warn }] }, motionWord(motionNow)) : null,
         )),
         open
           ? h(
@@ -484,6 +531,7 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
                     ),
                   )
                 : h(Text, { style: styles.rowMeta }, 'No dropped frames while anything animated.'),
+              motionNow ? h(View, { style: styles.motion }, ...trackingLines(motionNow).map((line, i) => h(Text, { key: `m${i}`, style: i === 0 ? styles.rowTitle : styles.rowMeta }, line.trim()))) : null,
             )
           : null,
       )
@@ -520,4 +568,5 @@ const styles = StyleSheet.create({
   row: { gap: 2 },
   rowTitle: { color: '#fafafa', fontSize: 12, fontWeight: '600' },
   rowMeta: { color: '#a1a1aa', fontSize: 11 },
+  motion: { gap: 3, paddingTop: 6, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: '#3f3f46' },
 })

@@ -71,7 +71,13 @@ export type InspectorStyleSite = {
   component: string | null
   /** The variable it is assigned to, e.g. "logoStyle". */
   name: string | null
-  links: Array<{ signal: string; prop: string }>
+  /**
+   * `signal` is the name the style reads the value by. `id`, when the runtime could tell: the value's
+   * call site (an InspectorSignalSite id), so a shared value passed in from another component (a
+   * parent's `scrollX` read by every row through a prop) is the parent's, not one of that name in
+   * this component. Without it, readers match the name in the style's component.
+   */
+  links: Array<{ signal: string; prop: string; id?: string }>
 }
 
 /** One gesture callback, baked in by the Babel plugin: `Gesture.Pan().onUpdate(…)` → Pan, onUpdate. */
@@ -299,8 +305,47 @@ export type InspectorTask = {
  * Work on the frame thread in one frame, with its total time in that frame. On React Native: an
  * animated style, a derived value, a reaction, a scroll handler, a gesture callback or a scheduleOnUI
  * call (worklets). Other frameworks report their own kinds (Flutter: build, layout, paint).
+ *
+ * `hop` (React Native): a worklet handed a function to the JS thread (scheduleOnRN, runOnJS(fn)(…)),
+ * `calls` times in that frame, from `site`; `name` is the function, `ms` 0 (the hop is not timed).
  */
 export type InspectorUiWork = { t: number; ms: number; calls: number; kind: string; site: string; name: string | null }
+
+/**
+ * What animates in the app now, as it counts it (React Native): Motion Scan shows it, and the app sends
+ * it with `samples` every few seconds while an editor is connected (the MCP server's inspector_status
+ * prints it). Information, never a problem: the problems engine reads recordings. Lists are the top
+ * few, most first. Rates are over the last `windowMs`.
+ */
+export type InspectorMotionTracking = {
+  /** The screen it describes (the current route), or null when navigation is not tracked. */
+  screen: string | null
+  windowMs: number
+  /** Frames drawn in the window: counted, or the display's rate times the window. */
+  frames: number
+  /** Mounted now: animated style instances, shared-value instances, animated properties per view. */
+  inventory: { styles: number; values: number; propsPerView: number }
+  /** Shared-value instances per useSharedValue call site (the `<site>#n` slots). */
+  values: Array<{ site: string; name: string | null; component: string | null; instances: number }>
+  /** Animated style instances per useAnimatedStyle call site, with how many properties each animates. */
+  styles: Array<{ site: string; name: string | null; component: string | null; instances: number; props: number }>
+  /** Fan-out: how many style instances each driving value feeds, and their properties. */
+  drivers: Array<{ name: string; site: string | null; styles: number; props: number }>
+  /**
+   * Cost per list cell: UI work of a worklet that runs in several instances a frame, per instance and
+   * per frame. Null when UI work was not measured in the window (it is sampled).
+   */
+  cells: Array<{ site: string; name: string | null; kind: string; instances: number; msPerCell: number; msPerFrame: number }> | null
+  /** Animation starts per frame, by call site (runs against frames drawn). */
+  restarts: Array<{ site: string; fn: string; what: string | null; where: string; runs: number; perFrame: number }>
+  /**
+   * Shared-value slots claimed and freed per call site, how many of those while a list scrolled or a
+   * finger moved, and how many instances are mounted now. A virtualized list mounts rows as they come
+   * into its window; every row mounting again, several times over (claims far above `instances`), is
+   * a renderItem component made inline or keys that change.
+   */
+  churn: Array<{ site: string; name: string | null; component: string | null; claimed: number; freed: number; whileScrolling: number; instances: number }>
+}
 
 // ─── Recordings ─────────────────────────────────────────────────────────────────
 // A session recorded on the device, with no panel connected, saved as one JSON file a tester can send
@@ -521,6 +566,8 @@ export type InspectorAppMessage =
       markers?: InspectorMarker[]
       tasks?: InspectorTask[]
       work?: InspectorUiWork[]
+      /** What animates now (see InspectorMotionTracking): every few seconds while an editor is connected, recording or not. */
+      tracking?: InspectorMotionTracking
     }
   /** A recording made on the device (from Motion Scan or startRecording), handed to a connected panel. */
   | { type: 'recording'; recording: InspectorRecording }

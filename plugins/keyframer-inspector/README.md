@@ -33,9 +33,10 @@ project that has `@keyframerdev/inspector` installed, npx uses that copy.
 | `keyframer-inspector-ci` | Write check files and run `keyframer-inspect ci` on pull requests |
 | `keyframer-vitals` | Set up Motion Vitals, upload symbols, and fix a production field problem |
 
-The MCP server gives the agent 21 tools, among them `inspector_status`, `record`, `run_scenario`,
-`compare`, `set_time` (slow motion, pause, step), `capture_frame`, `check` and `recheck`. The full list
-is in the [MCP server docs](https://keyframer.dev/inspector/docs/agents/mcp-server).
+The MCP server gives the agent 22 tools, among them `inspector_status`, `record`, `run_scenario`,
+`compare`, `set_time` (slow motion, pause, step), `capture_frame`, `check`, `recheck` and `lint_project`
+(the static checks over a React Native project's source, no app needed). The full list is in the
+[MCP server docs](https://keyframer.dev/inspector/docs/agents/mcp-server).
 
 Try: "The card expand on the Feed screen stutters. Record it, find why, and fix it."
 

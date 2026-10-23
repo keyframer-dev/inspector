@@ -49,6 +49,8 @@ The problem's own `fix` text is the primary guide. The patterns behind it:
 | `jump` | Continue from the current value and velocity: do not reset `.value` or the controller before animating; pass the gesture's velocity to the spring; `.beginFromCurrentState`; `animateTo` on one remembered `Animatable` |
 | `render-hint` | By hint: `shadow-path` gives the shadow a shape; `mask`/`blur` keep them off moving content; `group-opacity`/`layer-alpha` animate children or use a hardware layer; `elevation` keeps elevation fixed and animates a transform; `opacity-widget` uses `FadeTransition`; `save-layer` uses `Clip.antiAlias`; `rasterize` turns rasterizing off while it animates |
 | `gesture-lost`, `gesture-steals-scroll` | Give the gesture and the list their own directions (`activeOffsetX([-10, 10])` with `failOffsetY([-5, 5])` in a vertical list); use the `ScrollView`/`FlatList` from react-native-gesture-handler with `simultaneousWithExternalGesture`, `requireExternalGestureToFail` or `blocksExternalGesture` |
+| `restart-storm` | Animate once per change (a shared value set when the target changes, read in the style), or follow the scroll with `interpolate` and no `withSpring`/`withRepeat` in the row's `useAnimatedStyle` |
+| `thread-hops` | Keep per-frame values on the UI thread; call `scheduleOnRN` only when something React needs changes (compare in the worklet first) |
 | `gesture-cancelled` | Relate the two gestures: `simultaneousWithExternalGesture` to run both, `requireExternalGestureToFail` or `blocksExternalGesture` for one to wait; offsets keep the other off this one's drags |
 | `error`, `warning` | Fix the logged error first: it may stop an animation from finishing |
 
@@ -57,6 +59,8 @@ Rules:
 - Keep the motion. Never delete, disable or shorten an animation to make a problem go away. A problem whose animation stopped is Removed, not Fixed.
 - Change only what the problem needs. Keep the animation's numbers unless the problem is about them.
 - Do not touch the inspector's setup: its imports, `connectDevTools`, `registerScenario`, the Babel config, `.keyframer/`.
+
+React Native static findings (the `lint_project` MCP tool, `npx keyframer-inspect lint`, or Metro's terminal) need no recording: worklet crashes (`declared-after`, `js-call`) and motion rules such as `descending-input-range`, `per-frame-js`, `spring-missing-mass` or `value-in-render`, each with its line and fix (every rule: https://keyframer.dev/inspector/docs/problems/static-checks). Apply the fix, then run `lint_project` with `paths: ["<file>"]` (or `npx keyframer-inspect lint <file>`) again: the finding is gone when it is fixed. The desktop app's MCP server has no `lint_project`: use the CLI there. Silence a deliberate one with `// keyframer-disable-next-line <rule> -- why` rather than changing the motion.
 
 ## 4. Let the change reach the app
 

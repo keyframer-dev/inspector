@@ -137,6 +137,17 @@ export function __kfWork(kind: string, site: string, name: string | null, ms: nu
   if (buf !== undefined) buf.push(kind, site, name, ms)
 }
 
+/**
+ * A worklet handing `name` to the JS thread (scheduleOnRN, runOnJS(fn)(…)), placed before the call by
+ * the Babel plugin: counted per frame as UI work of kind `hop` (no time of its own) while something
+ * listens on the UI thread. On the JS thread, and with nothing listening, a check of one global.
+ */
+export function __kfHop(site: string, name: string | null): void {
+  'worklet'
+  const buf = (globalThis as TimingGlobal).__KF_UI_WORK__
+  if (buf !== undefined) buf.push('hop', site, name, 0)
+}
+
 /** Where a scrolled list is, from its onScroll worklet: buffered for the frame when a recording listens. */
 export function __kfScroll(id: string, event: { contentOffset?: { x: number; y: number } } | undefined): void {
   'worklet'
@@ -378,16 +389,36 @@ export function appComponentFile(name: string): string | undefined {
  * stays for them and for tests. Builds from this plugin call useKfSignal, which tells instances apart.
  */
 export function __kfSignal<T>(sv: T, site: InspectorSignalSite): T {
+  noteSite(sv, site.id)
   seen().signals.set(site.id, { sv, site })
   ;(globalThis as HookGlobal).__KF_INSPECTOR__?.signal(sv, site)
   return sv
 }
 
+// Which call site made each shared value, by the value itself, noted as it renders: a component that
+// reads a value it was handed (a parent's `scrollX` through a prop, or the `progress` it derives with
+// useDerivedValue) learns where it comes from, since a parent renders before its children. Weak: values
+// that go are forgotten with them.
+type SvSitesShared = { __KF_SV_SITES__?: WeakMap<object, string> }
+const svSites = ((globalThis as SvSitesShared).__KF_SV_SITES__ ??= new WeakMap())
+
+function noteSite(sv: unknown, siteId: string): void {
+  if (sv !== null && (typeof sv === 'object' || typeof sv === 'function') && !svSites.has(sv as object)) svSites.set(sv as object, siteId)
+}
+
+/** The call site of a shared value that rendered through useSharedValue or useDerivedValue, or undefined. */
+export function siteOfValue(sv: unknown): string | undefined {
+  return sv !== null && (typeof sv === 'object' || typeof sv === 'function') ? svSites.get(sv as object) : undefined
+}
+
 // Every mounted instance of a useSharedValue call site has a slot: the first is the call site itself,
 // the next ones `<site>#2`, `<site>#3`… (each row of a list that owns a shared value). A slot frees
-// when its component unmounts, so a screen that re-mounts gets its old ids back.
-type SlotShared = { __KF_SLOTS__?: Map<string, Set<number>> }
+// when its component unmounts, so a screen that re-mounts gets its old ids back. How many were claimed
+// and freed per call site, ever, says how much its rows remount (an inline renderItem component, keys
+// that change): readers diff the counts over time.
+type SlotShared = { __KF_SLOTS__?: Map<string, Set<number>>; __KF_SLOT_CHURN__?: Map<string, { claimed: number; freed: number }> }
 const slots = ((globalThis as SlotShared).__KF_SLOTS__ ??= new Map())
+const slotChurnBySite = ((globalThis as SlotShared).__KF_SLOT_CHURN__ ??= new Map())
 
 function claimSlot(siteId: string): number {
   const taken = slots.get(siteId) ?? new Set<number>()
@@ -395,15 +426,36 @@ function claimSlot(siteId: string): number {
   while (taken.has(n)) n++
   taken.add(n)
   slots.set(siteId, taken)
+  const churn = slotChurnBySite.get(siteId)
+  if (churn) churn.claimed++
+  else slotChurnBySite.set(siteId, { claimed: 1, freed: 0 })
   return n
 }
 
+function freeSlot(siteId: string, n: number): void {
+  if (!slots.get(siteId)?.delete(n)) return
+  const churn = slotChurnBySite.get(siteId)
+  if (churn) churn.freed++
+}
+
+/** Shared-value slots claimed and freed per call site since the app started (counters: diff them over time). */
+export function slotChurn(): ReadonlyMap<string, { readonly claimed: number; readonly freed: number }> {
+  return slotChurnBySite
+}
+
+/** How many instances of each useSharedValue call site are mounted now. */
+export function liveSlots(): ReadonlyMap<string, ReadonlySet<number>> {
+  return slots
+}
+
 /**
- * A useSharedValue in a component, wrapped by the Babel plugin: registers this instance while it is
- * mounted, under its own id, and unregisters it when it unmounts. A hook (it is called where
- * useSharedValue is, so always at the top of a component or hook).
+ * A useSharedValue (or useDerivedValue: a value it derives is a shared value too, recorded the same
+ * way) in a component, wrapped by the Babel plugin: registers this instance while it is mounted, under
+ * its own id, and unregisters it when it unmounts. A hook (it is called where the value's hook is, so
+ * always at the top of a component or hook).
  */
 export function useKfSignal<T>(sv: T, site: InspectorSignalSite): T {
+  noteSite(sv, site.id)
   try {
     registerWhileMounted(sv, site)
   } catch {
@@ -426,7 +478,7 @@ function registerWhileMounted(sv: unknown, site: InspectorSignalSite) {
         seen().signals.delete(instance.id)
         seen().routes.delete(instance.id)
       }
-      slots.get(site.id)?.delete(n)
+      freeSlot(site.id, n)
       ;(globalThis as HookGlobal).__KF_INSPECTOR__?.unsignal?.(instance.id)
     }
     // Once per shared value: a new one (a re-mount) is a new instance.
@@ -441,6 +493,78 @@ export function __kfStyle<T>(style: T, site: InspectorStyleSite): T {
   s.styles.set(site.id, site)
   ;(globalThis as HookGlobal).__KF_INSPECTOR__?.style(site)
   return style
+}
+
+// The call sites the values of a style's links resolved to, once per style call site (its first render).
+type StyleShared = { __KF_STYLE_SITES__?: Map<string, InspectorStyleSite>; __KF_LIVE_STYLES__?: Map<string, { count: number; routes: Map<string, number> }> }
+const resolvedStyles = ((globalThis as StyleShared).__KF_STYLE_SITES__ ??= new Map())
+const liveStyleCounts = ((globalThis as StyleShared).__KF_LIVE_STYLES__ ??= new Map())
+
+/**
+ * A style's links with the call site of each value it reads (`values`: what the style's worklet reads,
+ * by name, as the component has them: a prop, a hook's result, its own shared value). A parent's
+ * `scrollX` passed to every row then belongs to the parent, not to a value of that name in the row.
+ */
+export function resolveStyleSite(site: InspectorStyleSite, values?: Record<string, unknown>): InspectorStyleSite {
+  if (!values) return site
+  const done = resolvedStyles.get(site.id)
+  if (done) return done
+  let changed = false
+  const links = site.links.map((l) => {
+    const id = l.id ?? siteOfValue(values[l.signal])
+    if (!id || id === l.id) return l
+    changed = true
+    return { ...l, id }
+  })
+  const out = changed ? { ...site, links } : site
+  resolvedStyles.set(site.id, out)
+  return out
+}
+
+/**
+ * A useAnimatedStyle (or useAnimatedProps) in a component, wrapped by the Babel plugin: its links
+ * resolved to the values' call sites (see resolveStyleSite), registered like __kfStyle, and counted
+ * while this instance is mounted, with the screen it mounted on. A hook, called where the style hook is.
+ */
+export function useKfStyle<T>(style: T, site: InspectorStyleSite, values?: Record<string, unknown>): T {
+  const resolved = resolveStyleSite(site, values)
+  try {
+    countWhileMounted(resolved.id)
+  } catch {
+    // Called outside React (a test): nothing to count.
+  }
+  return __kfStyle(style, resolved)
+}
+
+function countWhileMounted(styleId: string): void {
+  useEffect(() => {
+    let live = liveStyleCounts.get(styleId)
+    if (!live) liveStyleCounts.set(styleId, (live = { count: 0, routes: new Map() }))
+    live.count++
+    let route: string | null = null
+    let gone = false
+    // Read once the commit's effects have run: a screen's components mount before it is reported (see noteRoute).
+    void Promise.resolve().then(() => {
+      if (gone) return
+      route = nav.current?.route ?? null
+      if (route !== null) live!.routes.set(route, (live!.routes.get(route) ?? 0) + 1)
+    })
+    return () => {
+      gone = true
+      live!.count = Math.max(0, live!.count - 1)
+      if (route !== null) {
+        const n = (live!.routes.get(route) ?? 1) - 1
+        if (n > 0) live!.routes.set(route, n)
+        else live!.routes.delete(route)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+}
+
+/** Mounted instances of each animated style call site now, and the screens they mounted on. */
+export function liveStyles(): ReadonlyMap<string, { readonly count: number; readonly routes: ReadonlyMap<string, number> }> {
+  return liveStyleCounts
 }
 
 // ─── Screens ──────────────────────────────────────────────────────────────────────
@@ -472,11 +596,11 @@ export function signalRoutes(): ReadonlyMap<string, string> {
 // events, and kept for recordings started later.
 
 const SHADOW_PROPS = new Set(['shadowOpacity', 'shadowRadius', 'shadowOffset', 'shadowColor', 'elevation', 'boxShadow'])
-/** Style properties that lay the view out again when they change (the problems engine's list). */
+/** Style properties that lay the view out again when they change (the problems engine's list), text metrics included. */
 const LAYOUT_PROPS = new Set([
   'width', 'height', 'minWidth', 'minHeight', 'maxWidth', 'maxHeight', 'top', 'left', 'right', 'bottom', 'margin', 'marginTop', 'marginBottom',
   'marginLeft', 'marginRight', 'marginHorizontal', 'marginVertical', 'padding', 'paddingTop', 'paddingBottom', 'paddingLeft', 'paddingRight',
-  'paddingHorizontal', 'paddingVertical', 'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'borderWidth', 'gap',
+  'paddingHorizontal', 'paddingVertical', 'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'borderWidth', 'gap', 'fontSize', 'lineHeight', 'letterSpacing',
 ])
 
 /** The hints a set of animated style properties gives. `id`: the style or animation call site they belong to. */

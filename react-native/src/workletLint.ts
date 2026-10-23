@@ -13,11 +13,17 @@
  *
  * Only what is certain is reported. A call is flagged when the function is in this file and provably
  * not a worklet, a React state setter (useState, useReducer) or Redux's dispatch, a navigation object,
- * a callback prop of a component (`on…`), or a JS-only API (fetch, Alert, Linking, expo-haptics…).
+ * a callback prop of a component (`on…`), a method of the component a React ref holds
+ * (`listRef.current?.scrollToOffset(…)`, when the ref is given to an element here), or a JS-only API
+ * (fetch, Alert, Linking, expo-haptics…). Optional calls (`onDone?.()`) count like plain ones.
  * Imports the analysis cannot see into are not flagged: they become suspects, which the runtime uses
  * to place a crash it did not see coming (workletCrash.ts). Gestures with `.runOnJS(true)` run their
  * callbacks on the JS thread, so their calls are fine. Bundle Mode, where worklets can call any
  * function, is not detected.
+ *
+ * A finding is silenced by a comment naming its rule on the line above it
+ * (`// keyframer-disable-next-line js-call`) or at the end of its line (`// keyframer-disable-line`);
+ * without a rule, every rule on that line. The same comments work for motionLint.ts.
  *
  * Pure: a Babel program path in (the Babel plugin's, or the CLI's own parse), findings out.
  */
@@ -40,9 +46,9 @@ export type WorkletSuspect = {
 export type WorkletLint = { issues: InspectorWorkletIssue[]; suspects: WorkletSuspect[] }
 
 /** Where a worklet runs: the UI thread, another worklet runtime, the JS thread (a gesture with runOnJS), or not known ('worklet' alone). */
-type Thread = 'ui' | 'runtime' | 'js' | 'unknown'
+export type Thread = 'ui' | 'runtime' | 'js' | 'unknown'
 
-type Worklet = {
+export type Worklet = {
   fn: NodePath<T.Function>
   /** What makes it one: "useAnimatedStyle", "Pan.onUpdate", "scheduleOnUI", "'worklet'". */
   kind: string
@@ -50,6 +56,10 @@ type Worklet = {
   site: string
   line: number
   name: string | null
+  /** The key it was given under in an object of callbacks (`useAnimatedScrollHandler({ onScroll })` → "onScroll"); null when handed over directly. */
+  key: string | null
+  /** The call that makes it one (`useAnimatedStyle(…)`, `Gesture.Pan().onUpdate(…)`); null for the directive alone. */
+  call: NodePath<T.CallExpression> | null
   thread: Thread
   /** For a worklet that runs on the UI thread because another one calls it: that one. */
   via: Worklet | null
@@ -82,12 +92,14 @@ const RUNTIME_ARGS = new Map<string, number[]>(Object.entries({
   runOnRuntimeSyncWithId: [1],
   scheduleOnRuntimeWithId: [1],
 }))
-const GESTURE_HOOKS = new Set(['useTapGesture', 'usePanGesture', 'usePinchGesture', 'useRotationGesture', 'useFlingGesture', 'useLongPressGesture', 'useNativeGesture', 'useManualGesture', 'useHoverGesture'])
+export const GESTURE_HOOKS = new Set(['useTapGesture', 'usePanGesture', 'usePinchGesture', 'useRotationGesture', 'useFlingGesture', 'useLongPressGesture', 'useNativeGesture', 'useManualGesture', 'useHoverGesture'])
 const OBJECT_HOOKS = new Set(['useAnimatedScrollHandler', ...GESTURE_HOOKS])
 const GESTURE_OBJECTS = new Set(['Tap', 'Pan', 'Pinch', 'Rotation', 'Fling', 'LongPress', 'ForceTouch', 'Native', 'Manual', 'Race', 'Simultaneous', 'Exclusive', 'Hover'])
 const GESTURE_METHODS = new Set(['onBegin', 'onStart', 'onEnd', 'onFinalize', 'onUpdate', 'onChange', 'onTouchesDown', 'onTouchesMove', 'onTouchesUp', 'onTouchesCancelled'])
 /** Calls that hand a function to the JS thread: their function arguments do not run in the worklet. */
-const TO_JS = new Set(['scheduleOnRN', 'runOnJS'])
+export const TO_JS = new Set(['scheduleOnRN', 'runOnJS'])
+/** Methods of the components React refs hold that move a list: Reanimated's scrollTo does it on the UI thread. */
+const SCROLL_METHODS = new Set(['scrollTo', 'scrollToOffset', 'scrollToEnd'])
 
 /** Imports whose functions only work on the JS thread, by module: the names (or `*` for all of them). */
 const JS_ONLY_IMPORTS = new Map<string, Set<string> | '*'>(Object.entries({
@@ -112,22 +124,22 @@ const UI_GLOBALS = new Set(
   ).split(' '),
 )
 
-const isFunctionPath = (p: NodePath | null | undefined): p is NodePath<T.Function> =>
+export const isFunctionPath = (p: NodePath | null | undefined): p is NodePath<T.Function> =>
   !!p && (p.isFunctionDeclaration() || p.isFunctionExpression() || p.isArrowFunctionExpression() || p.isObjectMethod())
 
-function hasWorkletDirective(fn: T.Node): boolean {
+export function hasWorkletDirective(fn: T.Node): boolean {
   const body = (fn as T.Function).body
   return !!body && body.type === 'BlockStatement' && body.directives.some((d) => d.value.value === 'worklet')
 }
 
-function keyName(key: T.Node): string | null {
+export function keyName(key: T.Node): string | null {
   if (key.type === 'Identifier') return key.name
   if (key.type === 'StringLiteral') return key.value
   return null
 }
 
 /** The name the plugin matches a call by: `useAnimatedStyle(…)`, `Reanimated.useAnimatedStyle(…)`, `x.withTiming(…)`. */
-function calleeName(call: T.CallExpression): string | null {
+export function calleeName(call: T.CallExpression | T.OptionalCallExpression): string | null {
   const callee = call.callee.type === 'SequenceExpression' ? call.callee.expressions[call.callee.expressions.length - 1]! : call.callee
   if (callee.type === 'Identifier') return callee.name
   if (callee.type === 'MemberExpression' && callee.property.type === 'Identifier') return callee.property.name
@@ -163,7 +175,7 @@ function chainRunsOnJs(call: NodePath<T.CallExpression>): boolean {
 }
 
 /** Where a binding imported from a module came from: the module, and the name it exports. */
-function importOf(path: NodePath, name: string): { source: string; imported: string } | null {
+export function importOf(path: NodePath, name: string): { source: string; imported: string } | null {
   const b = path.scope.getBinding(name)
   if (!b || b.kind !== 'module') return null
   const decl = b.path.parentPath
@@ -175,7 +187,7 @@ function importOf(path: NodePath, name: string): { source: string; imported: str
 }
 
 /** `useState(…)` / `React.useState(…)` from react: the hook's name. */
-function reactHook(call: T.Node | null | undefined, path: NodePath): string | null {
+export function reactHook(call: T.Node | null | undefined, path: NodePath): string | null {
   if (!call || call.type !== 'CallExpression') return null
   const c = call.callee
   if (c.type === 'Identifier') {
@@ -190,7 +202,7 @@ function reactHook(call: T.Node | null | undefined, path: NodePath): string | nu
 }
 
 /** The name a function is known by: its own, or the variable it is assigned to (through memo / forwardRef). */
-function functionName(fn: NodePath): string | null {
+export function functionName(fn: NodePath): string | null {
   const node = fn.node as T.Function
   if ((node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression') && node.id) return node.id.name
   let p: NodePath | null = fn.parentPath
@@ -200,16 +212,23 @@ function functionName(fn: NodePath): string | null {
   return null
 }
 
-const isComponentName = (n: string | null) => !!n && /^[A-Z]/.test(n)
+export const isComponentName = (n: string | null) => !!n && /^[A-Z]/.test(n)
 
-export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: string; code?: string }): WorkletLint {
-  const file = opts.file
-  const code = opts.code ?? ''
+/** A function handed by name to a call that workletizes it (`scheduleOnUI(update)`). */
+export type PassedWorklet = { id: NodePath<T.Identifier>; call: NodePath<T.CallExpression>; kind: string }
+
+const lineOf = (n: T.Node) => n.loc?.start.line ?? 0
+
+/**
+ * Which functions in a file are worklets, what makes each one (a hook, a gesture callback, an
+ * animation's callback, the directive) and where it runs; with the functions handed over by name.
+ * motionLint.ts reads the same map for what runs on every frame.
+ */
+export function findWorklets(program: NodePath<T.Program>, file: string): { worklets: Map<T.Node, Worklet>; passed: PassedWorklet[] } {
   const worklets = new Map<T.Node, Worklet>()
   /** Functions passed by name to a call that workletizes them (`scheduleOnUI(update)`), checked for order. */
-  const passed: Array<{ id: NodePath<T.Identifier>; call: NodePath<T.CallExpression>; kind: string }> = []
+  const passed: PassedWorklet[] = []
 
-  const lineOf = (n: T.Node) => n.loc?.start.line ?? 0
   const add = (fn: NodePath<T.Function>, w: Omit<Worklet, 'fn' | 'via'>) => {
     const had = worklets.get(fn.node)
     // A 'worklet' function also handed to a hook: the hook says more about it.
@@ -217,7 +236,7 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
       if (had.thread === 'unknown' || (had.thread === 'js' && w.thread !== 'unknown')) had.thread = w.thread
       return
     }
-    worklets.set(fn.node, { fn, via: null, ...w, ...(had && w.kind === "'worklet'" ? { kind: had.kind, site: had.site } : {}) })
+    worklets.set(fn.node, { fn, via: null, ...w, ...(had && w.kind === "'worklet'" ? { kind: had.kind, site: had.site, key: had.key, call: had.call } : {}) })
   }
 
   /**
@@ -259,19 +278,19 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
     const found = resolve(arg, true, acceptObj)
     if (!found) return
     if (isFunctionPath(found)) {
-      add(found, { kind, site, line: lineOf(call.node), name: name ?? (found === arg ? null : functionName(found)), thread })
+      add(found, { kind, site, line: lineOf(call.node), name: name ?? (found === arg ? null : functionName(found)), key: null, call, thread })
       return
     }
     // An object of callbacks (useAnimatedScrollHandler({ onScroll }), usePanGesture({ onUpdate })).
     const obj = found as NodePath<T.ObjectExpression>
     const objThread = obj.node.properties.some((p) => p.type === 'ObjectProperty' && keyName(p.key) === 'runOnJS' && p.value.type === 'BooleanLiteral' && p.value.value) ? 'js' : thread
     for (const prop of obj.get('properties')) {
-      if (prop.isObjectMethod()) add(prop, { kind, site, line: lineOf(call.node), name: keyName(prop.node.key), thread: objThread })
+      if (prop.isObjectMethod()) add(prop, { kind, site, line: lineOf(call.node), name: keyName(prop.node.key), key: keyName(prop.node.key), call, thread: objThread })
       else if (prop.isObjectProperty()) {
         const value = prop.get('value') as NodePath
         if (value.isIdentifier()) passed.push({ id: value, call, kind })
         const fn = resolve(value, true, false)
-        if (fn && isFunctionPath(fn)) add(fn, { kind, site, line: lineOf(call.node), name: keyName(prop.node.key), thread: objThread })
+        if (fn && isFunctionPath(fn)) add(fn, { kind, site, line: lineOf(call.node), name: keyName(prop.node.key), key: keyName(prop.node.key), call, thread: objThread })
       }
     }
   }
@@ -304,9 +323,17 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
     },
     Function(fn) {
       // As the plugin reads the directive: not on class methods (those belong to worklet classes).
-      if (isFunctionPath(fn) && hasWorkletDirective(fn.node)) add(fn, { kind: "'worklet'", site: `${file}:${lineOf(fn.node)}`, line: lineOf(fn.node), name: functionName(fn), thread: 'unknown' })
+      if (isFunctionPath(fn) && hasWorkletDirective(fn.node)) add(fn, { kind: "'worklet'", site: `${file}:${lineOf(fn.node)}`, line: lineOf(fn.node), name: functionName(fn), key: null, call: null, thread: 'unknown' })
     },
   })
+  return { worklets, passed }
+}
+
+export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: string; code?: string }): WorkletLint {
+  const file = opts.file
+  const code = opts.code ?? ''
+  const { worklets, passed } = findWorklets(program, file)
+  const suppressed = lineSuppressions(program)
 
   const issues: InspectorWorkletIssue[] = []
   const suspects: WorkletSuspect[] = []
@@ -315,14 +342,14 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
   const lateNames = new Map<T.Node, Set<string>>()
   const report = (i: Omit<InspectorWorkletIssue, 'id' | 'file'>) => {
     const id = `${i.issue}:${file}:${i.line}:${i.column}:${i.name}`
-    if (seen.has(id)) return
+    if (seen.has(id) || suppressed(i.issue, i.line)) return
     seen.add(id)
     issues.push({ id, file, ...i })
   }
   const info = (w: Worklet): NonNullable<InspectorWorkletIssue['worklet']> => ({ site: w.site, kind: w.kind, name: w.name })
   const at = (n: T.Node) => ({ line: lineOf(n), column: (n.loc?.start.column ?? 0) + 1 })
   /** A call's arguments as written, for the fix (`e.translationX`), or `...args` when long. */
-  const argsText = (call: T.CallExpression) => {
+  const argsText = (call: T.CallExpression | T.OptionalCallExpression) => {
     const parts = call.arguments.map((a) => (a.start != null && a.end != null && code ? code.slice(a.start, a.end) : '…'))
     const text = parts.join(', ')
     return text.length > 60 || text.includes('\n') ? '...args' : text
@@ -355,7 +382,7 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
         const b = ref.scope.getBinding(ref.node.name)
         // Its own (declared inside it), or a function declaration naming itself.
         if (!b || b.path === w.fn || b.path.isDescendant(w.fn)) return
-        const callee = ref.parentPath.isCallExpression() && ref.parentPath.node.callee === ref.node
+        const callee = (ref.parentPath.isCallExpression() || ref.parentPath.isOptionalCallExpression()) && ref.parentPath.node.callee === ref.node
         const late = uninitializedAt(ref, w.fn, pos, callee)
         if (!late) return
         named.add(ref.node.name)
@@ -394,6 +421,45 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
   const running = new Set<T.Node>(queue.map((w) => w.fn.node))
   while (queue.length) {
     const w = queue.shift()!
+    // A call (or an optional call, `onDone?.()`) the worklet makes where it runs.
+    const onCall = (call: NodePath<T.CallExpression | T.OptionalCallExpression>) => {
+      const verdict = classify(call, w)
+      if (!verdict) return
+      if (verdict.type === 'worklet') {
+        const next = worklets.get(verdict.fn.node)
+        if (next && !running.has(next.fn.node)) {
+          running.add(next.fn.node)
+          next.thread = w.thread
+          next.via = w.via ?? w
+          queue.push(next)
+        }
+        return
+      }
+      if (lateNames.get(w.fn.node)?.has(verdict.name)) return
+      if (verdict.type === 'suspect') {
+        suspects.push({ name: verdict.name, key: verdict.name.split('.').pop()!, ...at(call.node.callee), worklet: info(w) })
+        return
+      }
+      const where = w.thread === 'runtime' ? 'its worklet runtime' : 'the UI thread'
+      const args = argsText(call.node)
+      const direct = `scheduleOnRN(${[verdict.name, ...(args ? [args] : [])].join(', ')})`
+      const v3 = `runOnJS(${verdict.name})(${args})`
+      const method = `${verdict.name.split('.').pop()!}OnJS`
+      const viaJs = verdict.wrap
+        ? `Call it on the JS thread through a function declared outside the worklet: const ${method} = (...args) => ${verdict.name}(...args), then scheduleOnRN(${[method, ...(args ? [args] : [])].join(', ')}) (runOnJS(${method})(${args}) in Reanimated 3).`
+        : `Call it on the JS thread: ${direct} (${v3} in Reanimated 3).`
+      report({
+        issue: 'js-call',
+        ...at(call.node.callee),
+        name: verdict.name,
+        worklet: info(w),
+        message: `${who(w)} calls ${verdict.name}, ${verdict.what}, on ${where}`,
+        fix:
+          (verdict.line !== null
+            ? `Make ${verdict.name} a worklet ('worklet' as the first line of its body, line ${verdict.line}) if it only computes or sets shared values; if it needs React state or JS APIs, call it with ${direct} instead (${v3} in Reanimated 3).`
+            : viaJs) + (verdict.hint ? ` ${verdict.hint}` : ''),
+      })
+    }
     w.fn.traverse({
       Function(inner) {
         if (!runsInside(inner, w.fn)) inner.skip()
@@ -405,44 +471,8 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
           suspects.push({ name: ref.node.name, key: ref.node.name, ...at(ref.node), worklet: info(w) })
         }
       },
-      CallExpression(call) {
-        const verdict = classify(call, w)
-        if (!verdict) return
-        if (verdict.type === 'worklet') {
-          const next = worklets.get(verdict.fn.node)
-          if (next && !running.has(next.fn.node)) {
-            running.add(next.fn.node)
-            next.thread = w.thread
-            next.via = w.via ?? w
-            queue.push(next)
-          }
-          return
-        }
-        if (lateNames.get(w.fn.node)?.has(verdict.name)) return
-        if (verdict.type === 'suspect') {
-          suspects.push({ name: verdict.name, key: verdict.name.split('.').pop()!, ...at(call.node.callee), worklet: info(w) })
-          return
-        }
-        const where = w.thread === 'runtime' ? 'its worklet runtime' : 'the UI thread'
-        const args = argsText(call.node)
-        const direct = `scheduleOnRN(${[verdict.name, ...(args ? [args] : [])].join(', ')})`
-        const v3 = `runOnJS(${verdict.name})(${args})`
-        const method = `${verdict.name.split('.').pop()!}OnJS`
-        const viaJs = verdict.wrap
-          ? `Call it on the JS thread through a function declared outside the worklet: const ${method} = (...args) => ${verdict.name}(...args), then scheduleOnRN(${[method, ...(args ? [args] : [])].join(', ')}) (runOnJS(${method})(${args}) in Reanimated 3).`
-          : `Call it on the JS thread: ${direct} (${v3} in Reanimated 3).`
-        report({
-          issue: 'js-call',
-          ...at(call.node.callee),
-          name: verdict.name,
-          worklet: info(w),
-          message: `${who(w)} calls ${verdict.name}, ${verdict.what}, on ${where}`,
-          fix:
-            verdict.line !== null
-              ? `Make ${verdict.name} a worklet ('worklet' as the first line of its body, line ${verdict.line}) if it only computes or sets shared values; if it needs React state or JS APIs, call it with ${direct} instead (${v3} in Reanimated 3).`
-              : viaJs,
-        })
-      },
+      CallExpression: onCall,
+      OptionalCallExpression: onCall,
     })
   }
   issues.sort((a, b) => a.line - b.line || a.column - b.column)
@@ -451,10 +481,10 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
   type Verdict =
     | { type: 'worklet'; fn: NodePath<T.Function> }
     | { type: 'suspect'; name: string }
-    | { type: 'js'; name: string; what: string; wrap: boolean; line: number | null }
+    | { type: 'js'; name: string; what: string; wrap: boolean; line: number | null; hint?: string }
 
   /** What a call in a worklet that runs on the UI thread calls. Null: nothing to say (a builtin, a shared value's method, its own code). */
-  function classify(call: NodePath<T.CallExpression>, w: Worklet): Verdict | null {
+  function classify(call: NodePath<T.CallExpression | T.OptionalCallExpression>, w: Worklet): Verdict | null {
     const callee = call.node.callee
     if (callee.type === 'Identifier') {
       const name = callee.name
@@ -503,12 +533,12 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
       }
       return null
     }
-    if (callee.type !== 'MemberExpression' || callee.computed || callee.property.type !== 'Identifier') return null
-    // obj.method(…): what the object is.
+    if (!isMember(callee) || callee.computed || callee.property.type !== 'Identifier') return null
+    // obj.method(…), obj?.method(…): what the object is.
     const text = memberText(callee)
     if (!text) return null
     let root: T.Node = callee.object
-    while (root.type === 'MemberExpression') root = root.object
+    while (isMember(root) || root.type === 'TSNonNullExpression') root = isMember(root) ? root.object : root.expression
     if (root.type !== 'Identifier') return null
     const b = call.scope.getBinding(root.name)
     if (!b || b.path === w.fn || b.path.isDescendant(w.fn)) return null
@@ -518,6 +548,21 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
       if (callee.object.type === 'Identifier' && jsOnly(from.source, from.imported)) return { type: 'js', name: text, what: `a JS-only API from ${from.source}`, wrap: true, line: null }
       if (callee.object.type === 'Identifier' && from.source === 'expo-router' && from.imported === 'router') return { type: 'js', name: text, what: 'a navigation method', wrap: true, line: null }
       return WORKLET_MODULES.has(from.source) ? null : { type: 'suspect', name: text }
+    }
+    // listRef.current?.scrollToOffset(…): the component a React ref holds, given to an element here.
+    const held = callee.object.type === 'TSNonNullExpression' ? callee.object.expression : callee.object
+    if (isMember(held) && !held.computed && keyName(held.property) === 'current' && held.object.type === 'Identifier' && isElementRef(b)) {
+      const method = callee.property.name
+      return {
+        type: 'js',
+        name: text,
+        what: 'a method of the component in a ref',
+        wrap: true,
+        line: null,
+        ...(SCROLL_METHODS.has(method)
+          ? { hint: `To scroll on the UI thread instead, give the list a ref from useAnimatedRef and call scrollTo(animatedRef, x, y, true) from react-native-reanimated in the worklet.` }
+          : {}),
+      }
     }
     if (callee.object.type === 'Identifier' && b.path.isVariableDeclarator()) {
       const init = b.path.node.init
@@ -533,7 +578,7 @@ export function analyzeWorklets(program: NodePath<T.Program>, opts: { file: stri
       if (prop === 'navigation' && callee.object.type === 'Identifier') return { type: 'js', name: text, what: 'a navigation method', wrap: true, line: null }
       // props.onDone(…), props.navigation.navigate(…)
       if (prop === '' && callee.object.type === 'Identifier' && /^on[A-Z]/.test(callee.property.name)) return { type: 'js', name: text, what: 'a callback prop', wrap: false, line: null }
-      if (prop === '' && callee.object.type === 'MemberExpression' && !callee.object.computed && keyName(callee.object.property) === 'navigation' && callee.object.object.type === 'Identifier') {
+      if (prop === '' && isMember(callee.object) && !callee.object.computed && keyName(callee.object.property) === 'navigation' && callee.object.object.type === 'Identifier') {
         return { type: 'js', name: text, what: 'a navigation method', wrap: true, line: null }
       }
     }
@@ -582,13 +627,54 @@ function jsOnly(source: string, imported: string): boolean {
 }
 
 /** `navigation.navigate`, `props.navigation.goBack`: a member call as written, when it is plain names. */
-function memberText(e: T.Node): string | null {
+export function memberText(e: T.Node): string | null {
   if (e.type === 'Identifier') return e.name
   if (e.type === 'ThisExpression') return 'this'
-  if (e.type !== 'MemberExpression' || e.computed) return null
+  if (e.type === 'TSNonNullExpression') {
+    const inner = memberText(e.expression)
+    return inner ? `${inner}!` : null
+  }
+  if (!isMember(e) || e.computed) return null
   const obj = memberText(e.object)
   const prop = keyName(e.property)
-  return obj && prop ? `${obj}.${prop}` : null
+  return obj && prop ? `${obj}${e.type === 'OptionalMemberExpression' && e.optional ? '?.' : '.'}${prop}` : null
+}
+
+/** `a.b` or `a?.b`. */
+export const isMember = (e: T.Node): e is T.MemberExpression | T.OptionalMemberExpression => e.type === 'MemberExpression' || e.type === 'OptionalMemberExpression'
+
+/** A useRef / createRef from react that is given to an element here (`ref={listRef}`): what it holds is a component. */
+function isElementRef(b: NonNullable<ReturnType<NodePath['scope']['getBinding']>>): boolean {
+  if (!b.path.isVariableDeclarator()) return false
+  const hook = reactHook(b.path.node.init, b.path)
+  if (hook !== 'useRef' && hook !== 'createRef') return false
+  return b.referencePaths.some((r) => {
+    const attr = r.parentPath?.parentPath
+    return !!r.parentPath?.isJSXExpressionContainer() && !!attr?.isJSXAttribute() && attr.node.name.type === 'JSXIdentifier' && attr.node.name.name === 'ref'
+  })
+}
+
+/**
+ * Lines whose findings a comment silences: `// keyframer-disable-next-line rule-a, rule-b` above the
+ * line, `// keyframer-disable-line rule` at its end (in JSX, the same words in a block comment).
+ * Without rules, every rule on that line; text after ` -- ` is the reason, for people.
+ */
+export function lineSuppressions(program: NodePath<T.Program>): (rule: string, line: number) => boolean {
+  const comments = (program.parent as T.File | undefined)?.comments ?? []
+  const byLine = new Map<number, Set<string> | '*'>()
+  for (const c of comments) {
+    const m = /^\s*keyframer-disable-(next-line|line)\b([^]*)$/.exec(c.value)
+    if (!m || !c.loc) continue
+    const line = m[1] === 'line' ? c.loc.start.line : c.loc.end.line + 1
+    const rules = m[2]!.split(/\s--\s/)[0]!.split(/[\s,]+/).filter(Boolean)
+    const had = byLine.get(line)
+    if (!rules.length || had === '*') byLine.set(line, '*')
+    else byLine.set(line, new Set([...(had ?? []), ...rules]))
+  }
+  return (rule, line) => {
+    const s = byLine.get(line)
+    return s === '*' || !!s?.has(rule)
+  }
 }
 
 /** A name inside a TypeScript type (`x: Foo`): not a reference at runtime. */

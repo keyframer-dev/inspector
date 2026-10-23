@@ -2,7 +2,7 @@
  * Motion Scan's bookkeeping, kept pure so it runs (and is tested) outside React Native.
  *
  * Every animation call the inspector reports becomes an ACTIVE WINDOW: from when it was called until
- * its estimated end (a timing's duration, a spring's settle time, delays and sequences added up). A
+ * its estimated end (a timing's duration, how long a spring runs, delays and sequences added up). A
  * dropped frame is charged to every animation active at that moment, per call site, so the scan can
  * say "Card.tsx:42 withSpring dropped 12 frames" instead of only "the app dropped frames".
  *
@@ -20,17 +20,156 @@ const isRef = (v: unknown): v is { $anim: number } =>
 const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d)
 const cfg = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {})
 
-/** How long a spring takes to settle (ms), from its physics: 4 time constants of its slowest decay. */
+/**
+ * withSpring's defaults in Reanimated 4: a config is merged over GentleSpringConfig and
+ * GentleSpringConfigWithDuration (react-native-reanimated 4.5.1, animation/spring/spring.ts and
+ * springConfigs.ts). Reanimated 3's were stiffness 100, damping 10, mass 1.
+ */
+export const SPRING_DEFAULTS = { damping: 120, mass: 4, stiffness: 900, duration: 550, dampingRatio: 1, energyThreshold: 6e-9 } as const
+/** The frames a spring is stepped on (60 fps), and the longest a physics config is said to run. */
+const SPRING_FRAME_MS = 1000 / 60
+const SPRING_MAX_MS = 5000
+
+/**
+ * The stiffness Reanimated gives a duration config (calculateNewStiffnessToMatchDuration): the one whose
+ * energy, from rest, falls to the threshold at 1.5 × duration. Its bisection, step for step.
+ */
+function stiffnessForDuration(duration: number, zeta: number, mass: number, threshold: number): number {
+  const t = (duration * 1.5) / 1000
+  const diff = (k: number) => {
+    const w = Math.sqrt(k / mass) * zeta
+    const env = Math.exp(-w * t)
+    const x = (1 + w * t) * env
+    const v = x * -w + w * env
+    return (k * x * x + mass * v * v) / k - threshold
+  }
+  let lo = Number.EPSILON
+  let hi = 8000
+  const direction = diff(hi) >= diff(lo) ? 1 : -1
+  let k = (lo + hi) / 2
+  let f = diff(k)
+  for (let i = 100; Math.abs(f) > threshold * 1e-3 && i > 0; i--) {
+    if (f * direction < 0) lo = k
+    else hi = k
+    k = (lo + hi) / 2
+    f = diff(k)
+  }
+  return k
+}
+
+/**
+ * How long a spring runs (ms), the way Reanimated 4 runs it: the config merged over withSpring's
+ * defaults, stepped from rest at 60 fps until its energy falls to the threshold (where Reanimated ends
+ * it and calls back), or until it passes its target with overshootClamping. A duration config
+ * (`duration` or `dampingRatio`, 550 ms when only the ratio is given) gets the stiffness Reanimated
+ * solves for, so it ends near 1.5 × duration. A damping ratio of 1 or more runs critically damped, as
+ * in Reanimated. A config it rejects, or a duration of 0, jumps to the end: 0. A velocity or clamp in
+ * the config is not read (both need the distance travelled, which the call does not say).
+ */
 export function springSettleMs(c: Record<string, unknown>): number {
-  if (typeof c.duration === 'number') return c.duration
-  const k = num(c.stiffness, 100)
-  const d = num(c.damping, 10)
-  const m = num(c.mass, 1)
-  const w0 = Math.sqrt(k / m)
-  const zeta = d / (2 * Math.sqrt(k * m))
-  const decay = zeta < 1 ? zeta * w0 : w0 * (zeta - Math.sqrt(zeta * zeta - 1))
-  const s = decay > 0 ? 4 / decay : 2
-  return Math.max(50, Math.min(5000, s * 1000))
+  const mass = num(c.mass, SPRING_DEFAULTS.mass)
+  const damping = num(c.damping, SPRING_DEFAULTS.damping)
+  const duration = num(c.duration, SPRING_DEFAULTS.duration)
+  const ratio = num(c.dampingRatio, SPRING_DEFAULTS.dampingRatio)
+  const threshold = num(c.energyThreshold, SPRING_DEFAULTS.energyThreshold)
+  let k = num(c.stiffness, SPRING_DEFAULTS.stiffness)
+  if (!(k > 0 && damping > 0 && mass > 0 && ratio > 0 && threshold > 0 && duration > 0)) return 0
+  const useDuration = num(c.duration, 0) !== 0 || num(c.dampingRatio, 0) !== 0
+  if (useDuration) k = stiffnessForDuration(duration, ratio, mass, threshold)
+  const w0 = Math.sqrt(k / mass)
+  const zeta = useDuration ? ratio : damping / (2 * Math.sqrt(k * mass))
+  // One frame of Reanimated's under- or critically damped solution.
+  const h = SPRING_FRAME_MS / 1000
+  const w1 = zeta < 1 ? w0 * Math.sqrt(1 - zeta * zeta) : 0
+  const env = Math.exp(-(zeta < 1 ? zeta * w0 : w0) * h)
+  const sin1 = Math.sin(w1 * h)
+  const cos1 = Math.cos(w1 * h)
+  const clamping = !!c.overshootClamping
+  const cap = useDuration ? Math.max(SPRING_MAX_MS, 3 * duration) : SPRING_MAX_MS
+  // Distance from the target (a share of the travel) and velocity.
+  let x = 1
+  let v = 0
+  for (let n = 1; n * SPRING_FRAME_MS <= cap; n++) {
+    if (zeta < 1) {
+      const frag = env * (sin1 * ((v + zeta * w0 * x) / w1) + x * cos1)
+      v = -zeta * w0 * frag + env * (cos1 * (v + zeta * w0 * x) - w1 * x * sin1)
+      x = frag
+    } else {
+      const frag = x + (v + w0 * x) * h
+      v = env * -w0 * frag + env * (v + w0 * x)
+      x = env * frag
+    }
+    if ((clamping && (x < 0 || x > 1)) || (k * x * x + mass * v * v) / k <= threshold) return Math.max(50, n * SPRING_FRAME_MS)
+  }
+  return cap
+}
+
+/** How far from its target a spring may be, as a share of the distance it started from, and look settled. */
+export const SPRING_VISUAL_SHARE = 0.02
+/**
+ * (1 + u)·e^(−u) = SPRING_VISUAL_SHARE: a critically damped spring from rest is that close to its
+ * target from ω0·t = u on (it never overshoots). Solved once, to the last digit a double holds.
+ */
+const CRITICAL_VISUAL_U = 5.833921701917391
+
+/**
+ * How long a spring visibly moves (ms): until it stays within 2% of the distance it started from
+ * (SPRING_VISUAL_SHARE), the way Reanimated 4 runs it (the config merged over withSpring's defaults,
+ * mass 4; a duration config with the stiffness Reanimated solves for; a damping ratio of 1 or more
+ * run critically damped). Its tail after that, until the energy threshold, moves less than the eye
+ * sees: springSettleMs says how long it runs, this how long it looks like it does.
+ *
+ * Solved from Reanimated's closed form, from rest: critically damped, ω0·t = CRITICAL_VISUAL_U.
+ * Underdamped, x(t) = e^(−ζω0·t)·(cos ω1t + ζω0/ω1·sin ω1t), whose peaks are at ω1t = nπ with
+ * height e^(−ζω0·nπ/ω1): the last peak higher than 2% is found from that, and the time it comes back
+ * within 2% after it (before the next zero) by bisection, where |x| only falls. With
+ * overshootClamping it ends at its first pass, so the first descent decides. Rounded up to the next
+ * 60 fps frame, and never past springSettleMs (a loose energy threshold ends it sooner). A config
+ * Reanimated rejects jumps to the end: 0.
+ */
+export function springVisualMs(c: Record<string, unknown>): number {
+  const settle = springSettleMs(c)
+  if (settle <= 0) return 0
+  const mass = num(c.mass, SPRING_DEFAULTS.mass)
+  const damping = num(c.damping, SPRING_DEFAULTS.damping)
+  const duration = num(c.duration, SPRING_DEFAULTS.duration)
+  const ratio = num(c.dampingRatio, SPRING_DEFAULTS.dampingRatio)
+  const threshold = num(c.energyThreshold, SPRING_DEFAULTS.energyThreshold)
+  let k = num(c.stiffness, SPRING_DEFAULTS.stiffness)
+  const useDuration = num(c.duration, 0) !== 0 || num(c.dampingRatio, 0) !== 0
+  if (useDuration) k = stiffnessForDuration(duration, ratio, mass, threshold)
+  const w0 = Math.sqrt(k / mass)
+  const zeta = useDuration ? ratio : damping / (2 * Math.sqrt(k * mass))
+  let t: number
+  if (zeta >= 1) t = CRITICAL_VISUAL_U / w0
+  else {
+    const a = zeta * w0
+    const b = w0 * Math.sqrt(1 - zeta * zeta)
+    const x = (s: number) => Math.exp(-a * s) * (Math.cos(b * s) + (a / b) * Math.sin(b * s))
+    // The last peak (n half-periods in) still more than 2% away; with overshootClamping, the start.
+    const peaks = (Math.log(1 / SPRING_VISUAL_SHARE) * b) / (a * Math.PI)
+    const n = c.overshootClamping ? 0 : Math.max(0, Math.ceil(peaks) - 1)
+    let lo = (n * Math.PI) / b
+    let hi = (n * Math.PI + Math.PI - Math.atan2(b, a)) / b
+    for (let i = 0; i < 100; i++) {
+      const mid = (lo + hi) / 2
+      if (Math.abs(x(mid)) > SPRING_VISUAL_SHARE) lo = mid
+      else hi = mid
+    }
+    t = hi
+  }
+  const frames = Math.ceil((t * 1000) / SPRING_FRAME_MS - 1e-9)
+  return Math.min(settle, frames * SPRING_FRAME_MS)
+}
+
+/**
+ * How long an animation call visibly runs (ms): a withSpring until it stays within 2% of its target
+ * (springVisualMs), anything else as estimateMs. What "still running" means when another animation
+ * takes the value over: a spring interrupted in its last 2% does not visibly jump.
+ */
+export function visibleMs(ev: AnimEvent, byEid: (eid: number) => AnimEvent | undefined): number {
+  if (ev.site.fn === 'withSpring' && !(typeof ev.durationMs === 'number' && Number.isFinite(ev.durationMs))) return springVisualMs(cfg(ev.args[1]))
+  return estimateMs(ev, byEid)
 }
 
 /**

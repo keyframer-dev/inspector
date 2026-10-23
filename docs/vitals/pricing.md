@@ -25,6 +25,37 @@ One plan, with every feature on every step. Only the number of sessions a month 
 - Every step, Free included: a personal or team workspace, up to 100 members with roles, unlimited projects, 90 days of detailed history, every alert and channel, symbol uploads, and the CI and MCP tools.
 - The debugger, Keyframer Inspector, stays free, and every SDK is MIT.
 
+## Founding 100
+
+The first 100 workspaces to send a real session become founding members, numbered 1 to 100 in the order their first session arrived. A number is given once and is never reused.
+
+Who qualifies:
+
+- A field session from your app counts: the same sessions the Usage page counts. Test runs uploaded from CI with a `kft_` key do not.
+- The first session has to arrive within 30 days of creating the workspace.
+- One founding workspace per person: if you already own one, another workspace of yours does not qualify.
+- The workspace gets its number within about 5 minutes of the first session, when usage is counted, and its owner gets an email.
+
+What founding members get:
+
+| Perk | What it is |
+|---|---|
+| A year of 50,000 extra sessions | 50,000 more sessions a month on top of your plan, free or paid, for 12 months from the day you joined. After 12 months the step you are on applies again. |
+| The price lock | Your price stays at today's launch price while you stay subscribed. |
+| The badge | Founding member #N next to the workspace in the dashboard, for everyone in it. |
+| The founders wall | A place at [keyframer.dev/vitals/founders](https://keyframer.dev/vitals/founders). Off until an owner or admin turns it on in Settings, then it shows a display name, a link and a logo. Off, the wall shows only your number. |
+| The founders Discord | Private channels with the other founding teams and the people building Motion Vitals. Join with the invite in the workspace's Settings (under Founding), then type `/claim`. |
+
+The public pages show how many places are left.
+
+### Getting into the founders channels
+
+1. Join the Keyframer.dev Discord with the invite in Settings, under Founding.
+2. Type `/claim` in the server. Discord shows you, and only you, a link that works for 15 minutes.
+3. Open it, sign in to Keyframer if you need to, check that the Discord account it names is yours, and press Link and unlock.
+
+You get the Founding member role at once, and the founders channels open. The founders channels are for the whole team: anyone who is a member of a founding workspace can claim the role, whatever their role in the workspace. Each Keyframer account links one Discord account, and each Discord account one Keyframer account. To move a link, ask us in #welcome.
+
 ## What counts
 
 A **reported session** is one session that sent at least one report. A session is one foreground period of the app, up to 10 minutes a window; a longer session sends several windows and still counts once.

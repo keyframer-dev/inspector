@@ -30,6 +30,7 @@ Your time zone is taken from your browser when you open the dashboard, and can b
 - It fires at most once an hour, day or week (the rule's setting) for the same problem or screen.
 - Every alert email has a link to mute that rule for 7 days.
 - Ignored problems never alert and are left out of the digest.
+- [Restart storms](index.md#restart-storms) are information for now: they never alert and are left out of the digest.
 - Every email has one-click unsubscribe, and the digest can be turned off in your email settings.
 
 ## Channels

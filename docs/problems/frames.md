@@ -9,7 +9,7 @@ section: Problems
 
 Each long frame is traced to what ran in it. Drops with the same cause become one problem. The fixes below are the text the inspector prints for each framework.
 
-Some kinds need data only one SDK sends. React commits, JS tasks and UI-thread worklet times come from the React Native Babel plugin, so `slow-render`, `render-storm`, `ui-work` and `layout-anim` are React Native problems.
+Some kinds need data only one SDK sends. React commits, JS tasks and UI-thread worklet times come from the React Native Babel plugin, so `slow-render`, `render-storm`, `ui-work`, `layout-anim`, `thread-hops` and (with Reanimated's calls) `restart-storm` are React Native problems.
 
 ### JS task
 
@@ -52,6 +52,24 @@ const [y, setY] = useState(0)
 // after: the UI thread animates it, React does not render
 const y = useSharedValue(0)
 const style = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }), [y])
+```
+
+### Thread hops
+
+Kind: `thread-hops`. A worklet hands a function to the JS thread (`scheduleOnRN(fn, …)`, `runOnJS(fn)(…)`) 30 or more times a second, kept up for half a second: `onProgress is called on the JS thread 60 times a second, from a worklet`. Each hop waits for the JS thread and copies its arguments across, so values sent every frame arrive late and add to whatever else the JS thread is doing. The Babel plugin counts hops per call site on the UI thread while recording.
+
+- **React Native:** Keep what changes every frame on the UI thread (a shared value read by `useAnimatedStyle` or `useDerivedValue`), and call the JS thread only when something React needs changes: compare in the worklet first (an index crossing a boundary, a gesture ending).
+
+A hop that sets state every frame shows as the render storm it causes, with a line saying which worklet feeds it, not as a second problem.
+
+```tsx
+// before: the JS thread hears every frame of the scroll
+onScroll: (e) => { scheduleOnRN(setPage, e.contentOffset.x / width) }
+// after: only when the page changes
+onScroll: (e) => {
+  const page = Math.round(e.contentOffset.x / width)
+  if (page !== current.value) { current.value = page; scheduleOnRN(setPage, page) }
+}
 ```
 
 ### JS unknown
@@ -100,6 +118,20 @@ progress.value = withTiming(1, { duration: 600 })
 // in each row: interpolate(progress.value, [index * 0.05, index * 0.05 + 0.3], [0, 1], Extrapolation.CLAMP)
 ```
 
+### Restart storm
+
+Kind: `restart-storm`. One call site starts its animation again on nearly every frame in more than three views at once: `withSpring → scale restarts on every frame in about 12 views`. It is usually `withSpring` or `withRepeat` inside a row's `useAnimatedStyle` that reads a value changing every frame (the scroll position): each row starts the animation over every frame, so it never gets to play (a spring loses its velocity, a repeat starts again). One view restarting every frame (a spring following the scroll) is how a follower works and is not flagged; nor are rows starting once as they mount. Nested calls (`withRepeat(withTiming(…))`) count as one animation, named by the outer call. A UI frame dropped while it runs, with no worklet over budget, is charged to it rather than to a burst.
+
+- **React Native:** Animate once per change instead: a shared value set when the target changes (`useAnimatedReaction`, or the event that changes it), read in the style; or follow the scroll with `interpolate` and no animation.
+- **Other frameworks:** Start it once when its target changes, not from code that runs every frame (a scroll listener, a build or layout pass), or follow the changing value directly.
+
+```tsx
+// before: every row restarts the spring on every frame of the scroll
+const style = useAnimatedStyle(() => ({ transform: [{ scale: withSpring(Math.abs(scrollX.value - index * width) < width / 2 ? 1.1 : 1) }] }))
+// after: follow the scroll directly
+const style = useAnimatedStyle(() => ({ transform: [{ scale: interpolate(scrollX.value, [(index - 1) * width, index * width, (index + 1) * width], [1, 1.1, 1], Extrapolation.CLAMP) }] }))
+```
+
 ### Busy start
 
 Kind: `busy-start`. An animation was started while the app thread was blocked, so its first frames waited.
@@ -120,7 +152,7 @@ Kind: `screen-mount`. Opening a screen dropped frames, during its transition.
 
 ### Layout animation
 
-Kind: `layout-anim`. An animated style animates layout properties (width, height, margins, padding, flex, border width, gap, position) every frame, so the native side lays the view out again on every frame.
+Kind: `layout-anim`. An animated style animates layout properties (width, height, margins, padding, flex, border width, gap, position, and text metrics: font size, line height, letter spacing) every frame, so the native side lays the view out again on every frame. Reads written `x.value`, `x.get()` and `props.x.value` all count. A shared value passed in as a prop (a carousel's `scrollX` read by every item, or the `progress` it derives with `useDerivedValue`) is linked to the call site that made it, so the item's style gets this problem, not only a render hint.
 
 - **React Native:** Animate `transform` (translateX/Y, scale) instead, or use a Reanimated layout animation for size changes.
 

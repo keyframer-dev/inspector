@@ -8,11 +8,19 @@
  *
  *   const logoScale = useSharedValue(0)
  *     ↓
- *   const logoScale = _kfSignal(useSharedValue(0), { id: "src/Welcome.tsx:31:20", name: "logoScale", … })
+ *   const logoScale = useKfSignal(useSharedValue(0), { id: "src/Welcome.tsx:31:20", name: "logoScale", … })
+ *
+ *   const progress = useDerivedValue(() => scrollX.value / width)   (a derived value is a shared value too)
+ *     ↓
+ *   const progress = useKfSignal(useDerivedValue(…), { id: "src/Carousel.tsx:14:19", name: "progress", … })
  *
  *   const logoStyle = useAnimatedStyle(() => ({ transform: [{ scale: logoScale.value }] }))
  *     ↓
- *   const logoStyle = _kfStyle(useAnimatedStyle(…), { name: "logoStyle", links: [{ signal: "logoScale", prop: "scale" }], … })
+ *   const logoStyle = useKfStyle(useAnimatedStyle(…), { name: "logoStyle", links: [{ signal: "logoScale", prop: "scale" }], … }, { logoScale })
+ *
+ *   scheduleOnRN(setIndex, i)   (or runOnJS(setIndex)(i))
+ *     ↓
+ *   (_kfHop("src/Pager.tsx:40", "setIndex"), scheduleOnRN(setIndex, i))
  *
  *   Gesture.Pan().onUpdate((e) => { … })
  *     ↓
@@ -28,6 +36,8 @@
 import type { NodePath, PluginObj, PluginPass, Visitor, types as BabelTypes } from '@babel/core'
 import type { InspectorCallSite, InspectorGestureSite, InspectorParam, InspectorSignalSite, InspectorStyleSite } from '../../protocol/inspector'
 import { analyzeWorklets, formatWorkletIssue, type WorkletLint } from './workletLint'
+import { analyzeMotion, formatMotionIssue, type MotionIssue } from './motionLint'
+import { readLintFacts } from './lintFacts'
 
 export const ANIMATION_FNS = new Set([
   'withTiming',
@@ -51,6 +61,8 @@ const WORKLET_HOOKS: Record<string, string> = {
 }
 /** Calls that run a worklet on the UI thread once. */
 const UI_RUNNERS = new Set(['scheduleOnUI', 'runOnUI'])
+/** Calls that hand a function to the JS thread: `scheduleOnRN(fn, …args)`, and `runOnJS(fn)(…args)` (Reanimated 3, still exported). */
+const JS_HOPS = new Set(['scheduleOnRN', 'runOnJS'])
 const EFFECT_HOOKS = new Set(['useEffect', 'useLayoutEffect'])
 const GESTURE_HANDLER = 'react-native-gesture-handler'
 const SVG = 'react-native-svg'
@@ -84,6 +96,12 @@ export type InspectorPluginOptions = {
   includeNodeModules?: boolean
   /** Print one warning per worklet mistake it finds (workletLint.ts) to Metro's terminal. On by default. */
   workletWarnings?: boolean
+  /**
+   * Print the motion checks' findings (motionLint.ts) to Metro's terminal: errors and warnings by
+   * default, `'all'` adds the info ones, false prints none. Babel's file metadata has them all
+   * (`keyframerMotion`) either way.
+   */
+  motionWarnings?: boolean | 'all'
 }
 
 /** Findings already printed by this process (Metro's workers transform a file again when it changes). */
@@ -94,6 +112,7 @@ const MAX_SUSPECTS = 60
 type State = PluginPass & {
   opts: InspectorPluginOptions
   animLocals: Map<string, string>
+  /** Local names of useSharedValue and useDerivedValue: the values registered as signals. */
   svLocals: Set<string>
   /** Local names of `Gesture` imported from react-native-gesture-handler. */
   gestureLocals: Set<string>
@@ -107,6 +126,8 @@ type State = PluginPass & {
   workletHookLocals: Map<string, string>
   /** scheduleOnUI / runOnUI, by local name. */
   uiRunnerLocals: Set<string>
+  /** scheduleOnRN / runOnJS, by local name → which one. */
+  hopLocals: Map<string, string>
   /** useEffect / useLayoutEffect from react, and the local names of the React default / namespace import. */
   effectLocals: Set<string>
   reactLocals: Set<string>
@@ -379,8 +400,30 @@ function numberOf(node: BabelTypes.Node): number | null {
 const NESTED_STYLE_KEYS = new Set(['shadowOffset', 'textShadowOffset'])
 
 /**
- * Inside a useAnimatedStyle worklet, every `x.value` read and the style key it ends up under:
- * `{ opacity: o.value, transform: [{ translateY: y.value }] }` → o → opacity, y → translateY,
+ * A shared value read in a worklet: `x.value`, `x.get()` (what React Compiler apps write), and the
+ * same through a prop object (`props.x.value`). The read's outermost node, the value's name, and the
+ * expression that is the value (`x`, `props.x`).
+ */
+function valueRead(member: NodePath<BabelTypes.MemberExpression>): { read: NodePath; name: string; value: BabelTypes.Identifier | BabelTypes.MemberExpression } | null {
+  const { node } = member
+  if (node.computed) return null
+  const key = keyName(node.property)
+  let read: NodePath
+  if (key === 'value') read = member
+  else if (key === 'get' && member.parentPath.isCallExpression() && member.parentPath.node.callee === node && member.parentPath.node.arguments.length === 0) read = member.parentPath
+  else return null
+  const obj = node.object
+  if (obj.type === 'Identifier') return { read, name: obj.name, value: obj }
+  if (obj.type === 'MemberExpression' && !obj.computed && obj.object.type === 'Identifier') {
+    const name = keyName(obj.property)
+    return name ? { read, name, value: obj } : null
+  }
+  return null
+}
+
+/**
+ * Inside a useAnimatedStyle worklet, every `x.value` (or `x.get()`) read and the style key it ends up
+ * under: `{ opacity: o.value, transform: [{ translateY: y.get() }] }` → o → opacity, y → translateY,
  * `{ shadowOffset: { height: h.value } }` → h → shadowOffset (not the layout height).
  */
 export function styleLinks(worklet: NodePath): Array<{ signal: string; prop: string }> {
@@ -388,25 +431,48 @@ export function styleLinks(worklet: NodePath): Array<{ signal: string; prop: str
   const seen = new Set<string>()
   worklet.traverse({
     MemberExpression(member) {
-      const { node } = member
-      if (node.computed || node.object.type !== 'Identifier' || keyName(node.property) !== 'value') return
-      for (let p: NodePath | null = member.parentPath; p && p !== worklet; p = p.parentPath) {
+      const found = valueRead(member)
+      if (!found) return
+      for (let p: NodePath | null = found.read.parentPath; p && p !== worklet; p = p.parentPath) {
         if (!p.isObjectProperty()) continue
         let prop = keyName(p.node.key)
         const outer = p.parentPath?.parentPath
         const outerKey = outer?.isObjectProperty() ? keyName(outer.node.key) : null
         if (outerKey && NESTED_STYLE_KEYS.has(outerKey)) prop = outerKey
         if (!prop || prop === 'transform') continue
-        const key = `${node.object.name}>${prop}`
+        const key = `${found.name}>${prop}`
         if (!seen.has(key)) {
           seen.add(key)
-          links.push({ signal: node.object.name, prop })
+          links.push({ signal: found.name, prop })
         }
         return
       }
     },
   })
   return links
+}
+
+/**
+ * The values a style's worklet reads from outside it, by name, as expressions the component can
+ * evaluate where the style hook is called: a prop (`scrollX` destructured, or `props.scrollX`), a
+ * hook's result, its own shared value. Only names bound before the call (never in the temporal dead
+ * zone) and not at module level. The runtime resolves each to the call site that made it.
+ */
+export function styleValues(worklet: NodePath, call: NodePath): Array<{ name: string; value: BabelTypes.Identifier | BabelTypes.MemberExpression }> {
+  const out: Array<{ name: string; value: BabelTypes.Identifier | BabelTypes.MemberExpression }> = []
+  const start = call.node.start ?? 0
+  worklet.traverse({
+    MemberExpression(member) {
+      const found = valueRead(member)
+      if (!found || out.some((x) => x.name === found.name)) return
+      const root = found.value.type === 'Identifier' ? found.value : (found.value.object as BabelTypes.Identifier)
+      const binding = member.scope.getBinding(root.name)
+      if (!binding || binding.kind === 'module' || binding.path.isDescendant(worklet)) return
+      if (binding.kind !== 'param' && (binding.path.node.end ?? Infinity) > start) return
+      out.push({ name: found.name, value: found.value })
+    },
+  })
+  return out
 }
 
 /** Numeric literals among the arguments, one object level deep: the values worth tuning. */
@@ -427,13 +493,23 @@ export function literalParams(args: BabelTypes.Node[]): InspectorParam[] {
   return params
 }
 
-/** The file's worklet mistakes; none when the analysis trips over code it does not expect (it never fails a build). */
-function lintFile(program: NodePath<BabelTypes.Program>, state: State): WorkletLint {
+/** The file's worklet mistakes and motion findings; none when an analysis trips over code it does not expect (it never fails a build). */
+function lintFile(program: NodePath<BabelTypes.Program>, state: State): WorkletLint & { motion: MotionIssue[] } {
+  const file = relativeFile(state)
+  const code = state.file.code ?? ''
+  let worklets: WorkletLint = { issues: [], suspects: [] }
+  let motion: MotionIssue[] = []
   try {
-    return analyzeWorklets(program, { file: relativeFile(state), code: state.file.code ?? '' })
+    worklets = analyzeWorklets(program, { file, code })
   } catch {
-    return { issues: [], suspects: [] }
+    /* nothing to say about this file */
   }
+  try {
+    motion = analyzeMotion(program, { file, code, ...readLintFacts(state.opts.root ?? state.cwd ?? '.') })
+  } catch {
+    /* nothing to say about this file */
+  }
+  return { ...worklets, motion }
 }
 
 export default function keyframerInspector({ types: t }: { types: typeof BabelTypes }): PluginObj<State> {
@@ -462,6 +538,8 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
   }
 
   const timed = new WeakSet<BabelTypes.Node>()
+  /** Hops to the JS thread already counted (the call stays in the tree, inside the sequence). */
+  const hopped = new WeakSet<BabelTypes.Node>()
   const imagesDone = new WeakSet<BabelTypes.Node>()
   /**
    * Times an inline worklet on the UI thread: its body runs between two clock reads and reports how
@@ -528,7 +606,7 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           for (const [exported, local] of state.helpers) specifiers.push(t.importSpecifier(local, t.identifier(exported)))
           if (state.animHelper) specifiers.push(t.importSpecifier(state.animHelper, t.identifier('__kfAnim')))
           if (state.signalHelper) specifiers.push(t.importSpecifier(state.signalHelper, t.identifier('useKfSignal')))
-          if (state.styleHelper) specifiers.push(t.importSpecifier(state.styleHelper, t.identifier('__kfStyle')))
+          if (state.styleHelper) specifiers.push(t.importSpecifier(state.styleHelper, t.identifier('useKfStyle')))
           if (state.layoutHelper) specifiers.push(t.importSpecifier(state.layoutHelper, t.identifier('__kfLayout')))
           if (state.gestureHelper) specifiers.push(t.importSpecifier(state.gestureHelper, t.identifier('__kfGesture')))
           if (specifiers.length) program.unshiftContainer('body', t.importDeclaration(specifiers, t.stringLiteral(RUNTIME_MODULE)))
@@ -694,6 +772,25 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
         if (state.skip) return
         const { node } = path
 
+        // scheduleOnRN(fn, …) and runOnJS(fn)(…): a hop to the JS thread, counted per frame on the UI
+        // thread while something listens (`__kfHop`, a worklet). The call itself is left as it is.
+        if (state.hopLocals.size && node.loc && !hopped.has(node)) {
+          const callee = node.callee
+          const hop =
+            callee.type === 'Identifier' && state.hopLocals.get(callee.name) === 'scheduleOnRN' && path.scope.getBinding(callee.name)?.kind === 'module'
+              ? node.arguments[0]
+              : callee.type === 'CallExpression' && callee.callee.type === 'Identifier' && state.hopLocals.get(callee.callee.name) === 'runOnJS' && path.scope.getBinding(callee.callee.name)?.kind === 'module'
+                ? callee.arguments[0]
+                : undefined
+          if (hop !== undefined) {
+            hopped.add(node)
+            const name = hop.type === 'Identifier' ? hop.name : hop.type === 'MemberExpression' && !hop.computed ? keyName(hop.property) : null
+            const count = t.callExpression(t.cloneNode(helper(state, path, '__kfHop')), [t.stringLiteral(`${relativeFile(state)}:${node.loc.start.line}`), name ? t.stringLiteral(name) : t.nullLiteral()])
+            path.replaceWith(t.sequenceExpression([count, node]))
+            return
+          }
+        }
+
         if (node.loc) {
           const file = relativeFile(state)
           const site = `${file}:${node.loc.start.line}`
@@ -805,16 +902,27 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
             name: declarator?.id.type === 'Identifier' ? declarator.id.name : null,
             links: worklet && (worklet.isFunction() as boolean) ? styleLinks(worklet) : [],
           }
-          state.styleHelper ??= path.scope.getProgramParent().generateUidIdentifier('kfStyle')
+          // A hook (it counts the style's mounted instances in an effect), named like one for the React
+          // Compiler and the rules of hooks. The values the worklet reads go with it, so the runtime can
+          // tell which call site each comes from (a parent's shared value passed in as a prop).
+          state.styleHelper ??= path.scope.getProgramParent().hasBinding('useKfStyle')
+            ? path.scope.getProgramParent().generateUidIdentifier('useKfStyle')
+            : t.identifier('useKfStyle')
           if (declarator?.id.type === 'Identifier') state.styleBindings.set(declarator.id, site.id)
           state.wrapped.add(node)
-          const call = t.callExpression(t.cloneNode(state.styleHelper), [node, literal(site)])
+          const values = worklet && (worklet.isFunction() as boolean) ? styleValues(worklet, path) : []
+          const call = t.callExpression(t.cloneNode(state.styleHelper), [
+            node,
+            literal(site),
+            ...(values.length ? [t.objectExpression(values.map((v) => t.objectProperty(t.identifier(v.name), t.cloneNode(v.value))))] : []),
+          ])
           state.wrapped.add(call)
           path.replaceWith(call)
           return
         }
 
-        if (isImported(path, name, state.svLocals)) {
+        // A value nobody keeps (a useDerivedValue run for its side effect) is never read or passed on.
+        if (isImported(path, name, state.svLocals) && !path.parentPath.isExpressionStatement()) {
           const declarator = path.parentPath.isVariableDeclarator() ? path.parentPath.node : null
           const site: InspectorSignalSite = {
             id: `${file}:${line}:${column}`,
@@ -824,7 +932,9 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
             name: declarator?.id.type === 'Identifier' ? declarator.id.name : null,
           }
           // A hook (it registers the instance in an effect), so its name starts with `use`: the React
-          // Compiler and the rules of hooks must see it as one.
+          // Compiler and the rules of hooks must see it as one. A derived value goes the same way: it is
+          // recorded like any shared value, and a child that is handed it (a carousel's progress passed
+          // to every item) links its style to this call site.
           state.signalHelper ??= path.scope.getProgramParent().hasBinding('useKfSignal')
             ? path.scope.getProgramParent().generateUidIdentifier('useKfSignal')
             : t.identifier('useKfSignal')
@@ -850,6 +960,7 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
           state.gestureHelper = null
           state.workletHookLocals = new Map()
           state.uiRunnerLocals = new Set()
+          state.hopLocals = new Map()
           state.effectLocals = new Set()
           state.reactLocals = new Set()
           state.helpers = new Map()
@@ -874,6 +985,7 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
                 const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
                 if (stmt.source.value === 'react' && EFFECT_HOOKS.has(imported)) state.effectLocals.add(spec.local.name)
                 if (stmt.source.value === WORKLETS && UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
+                if (stmt.source.value === WORKLETS && JS_HOPS.has(imported)) state.hopLocals.set(spec.local.name, imported)
               }
             }
             if (stmt.type === 'ImportDeclaration' && stmt.source.value === GESTURE_HANDLER && stmt.importKind !== 'type') {
@@ -901,10 +1013,11 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
               }
               const imported = spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value
               if (ANIMATION_FNS.has(imported)) state.animLocals.set(spec.local.name, imported)
-              if (imported === 'useSharedValue') state.svLocals.add(spec.local.name)
+              if (imported === 'useSharedValue' || imported === 'useDerivedValue') state.svLocals.add(spec.local.name)
               if (imported === 'useAnimatedStyle' || imported === 'useAnimatedProps') state.styleLocals.add(spec.local.name)
               if (imported in WORKLET_HOOKS) state.workletHookLocals.set(spec.local.name, WORKLET_HOOKS[imported]!)
               if (UI_RUNNERS.has(imported)) state.uiRunnerLocals.add(spec.local.name)
+              if (JS_HOPS.has(imported)) state.hopLocals.set(spec.local.name, imported)
             }
           }
           if (state.skip) return
@@ -918,6 +1031,16 @@ export default function keyframerInspector({ types: t }: { types: typeof BabelTy
               if (warned.has(issue.id)) continue
               warned.add(issue.id)
               console.warn(formatWorkletIssue(issue))
+            }
+          }
+          // Motion mistakes that do not crash (motionLint.ts): Metro prints the errors and warnings.
+          ;(state.file.metadata as unknown as Record<string, unknown>).keyframerMotion = lint.motion
+          const motionWarnings = state.opts.motionWarnings ?? true
+          if (motionWarnings !== false) {
+            for (const issue of lint.motion) {
+              if ((issue.severity === 'info' && motionWarnings !== 'all') || warned.has(issue.id)) continue
+              warned.add(issue.id)
+              console.warn(formatMotionIssue(issue))
             }
           }
           // Everything in one pass, here, before the plugins after this one see the file:

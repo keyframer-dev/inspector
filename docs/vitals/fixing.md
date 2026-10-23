@@ -49,6 +49,8 @@ keyframer-inspect check --field SHOP-12 --recording .keyframer/recordings/feed.k
 - **Not reproduced**, the site ran and dropped no frames: try a slower device, the tier the problem names.
 - **Not reproduced**, the site did not run: check a scenario or a recording that runs it.
 
+For a [restart storm](index.md#restart-storms), **Reproduced** means the check found a local `restart-storm` at that call site (it counts without lost frames of its own). It shows on any device: run a scenario that scrolls or drags on its screen the way people do.
+
 It never claims more than that. Field sites match local ones by file and line on React Native, and by the `trace`, `kfTrack` or controller name on native.
 
 What the field causes point at:

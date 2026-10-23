@@ -55,13 +55,13 @@ claude mcp add keyframer-inspector -- npx keyframer-inspect mcp --metro http://l
 
 ### Check that it works
 
-Call `inspector_status`. It names the connected app, its scenarios, its values, and its display rate, Reduce Motion and speed when it reports them. No app? Start it (Metro, or the desktop app) first.
+Call `inspector_status`. It names the connected app, its scenarios, its values, and its display rate, Reduce Motion and speed when it reports them. A React Native app also says what animates now (see [What animates now](../problems/index.md#what-animates-now)): what is mounted on the screen, fan-out, restarts per frame, rows that remount and the cost per list cell. No app? Start it (Metro, or the desktop app) first.
 
 ## Tools
 
 | Tool | Arguments | Does |
 |---|---|---|
-| `inspector_status` | | The connected app, its scenarios, the recorded sessions, its values and the render hints its SDK reported |
+| `inspector_status` | | The connected app, its scenarios, the recorded sessions, its values, the render hints its SDK reported, and what animates now (React Native) |
 | `select_app` | `app` | Through the desktop relay: which connected app the tools inspect. Omit `app` to follow the newest |
 | `record` | `durationMs` (default 4000, at most 60000), `signals`, `replay` | Records for a fixed time while a person uses the app (or runs its replay), then reports the problems |
 | `start_recording` | `signals` | Starts recording and returns at once, so another tool can drive the app |
@@ -83,10 +83,30 @@ Call `inspector_status`. It names the connected app, its scenarios, its values, 
 | `recheck` | | Measures again and sorts Fixed, Still there, New, Removed and Not verifiable |
 | `field_problems` | `project`, `version`, `os`, `status`, `limit` | A [Motion Vitals](../vitals/fixing.md) project's top field problems, in the dashboard's words. Needs `KEYFRAMER_VITALS_READ_KEY` |
 | `field_compare` | `project`, `from`, `to` | Two versions of a Motion Vitals project, problem by problem. Needs `KEYFRAMER_VITALS_READ_KEY` |
+| `lint_project` | `paths`, `severity` (`info`, `warning` or `error`, default `info`), `limit` (default 50, at most 500) | The [static checks](../problems/static-checks.md) over the project's React Native source, without running the app (as `keyframer-inspect lint`): worklet crashes first, then motion findings, most severe first, each as `file:line`, severity, rule, message and fix. Paths are files or folders inside the root the server started with (`--root`, default the directory it runs in). npm package only |
 
 The server also has one prompt, `fix-motion-problems` (in Claude Code: `/mcp__keyframer-inspector__fix-motion-problems`). See [Fix loop](fix-loop.md).
 
-The desktop app's built-in server and the npm package's give the same answers to the same calls.
+The desktop app's built-in server and the npm package's give the same answers to the same calls, with one exception: `lint_project` reads the source with the npm package's Babel analysis, so only the npm package's server (`npx keyframer-inspect mcp`, the plugin) has it. With the desktop app, run `npx keyframer-inspect lint` instead.
+
+## Static checks
+
+`lint_project` needs no app: it reads the project's files. Call it before recording, and again on a file after fixing it: the finding is gone when it is fixed.
+
+```text
+lint_project                                          # the whole project
+lint_project { "paths": ["app/feed.tsx"] }            # one file, after a fix
+lint_project { "severity": "warning", "limit": 20 }   # leave out info
+```
+
+```text
+app/sheet.tsx:6  crash js-call  The Pan.onEnd callback calls setO, a React state setter, on the UI thread
+  Fix: Call it on the JS thread: scheduleOnRN(setO, 1) (runOnJS(setO)(1) in Reanimated 3).
+app/screen.tsx:8  error descending-input-range  interpolate's input range [1, 0.5, 0] does not ascend (1 then 0.5): …
+  Fix: Write both ranges the other way round, which maps the same: interpolate(p.value, [0, 0.5, 1], [0, 1, 0]).
+```
+
+Worklet crashes have the severity `crash` and are always listed; `severity` filters the motion findings. A path outside the root, or a link that leads out of it, is refused.
 
 ## Record while an agent drives
 

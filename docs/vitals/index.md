@@ -61,6 +61,12 @@ An animation call site becomes a problem when it drops clearly more frames while
 
 Problems are ranked by frames attributable: the frames dropped above the screen's baseline while the animation ran. A spinner that runs the whole time a screen is open does not rise to the top just for being there. The dashboard says "dropped while this ran", never "caused".
 
+### Restart storms
+
+A second kind of problem, shown as **Restart storm**: one call site starting its animation again on nearly every frame in several views at once, so it never gets to play (a spring loses its velocity, a repeat starts again). It is usually `withSpring` or `withRepeat` inside a row's `useAnimatedStyle` that reads the scroll position. It is the inspector's [restart storm](../problems/frames.md#restart-storm), measured in the field: more than 3 starts a frame while it runs, over 60 frames a session or more on average, in at least 50 sessions. A list's rows each starting once as they mount last a few frames and do not count, and neither do layout animations (`entering`, `exiting`, `layout`) or one view following a value (one start a frame). Of calls nested on the same property (`withRepeat(withTiming(…))`), only the outermost is one.
+
+Restart storms are information for now: they get an id, a status and a page like any problem, and the next version confirms them fixed, but they never alert and stay out of the digest and Needs attention. A call site can be both kinds at once, under two ids. Its page charts starts a frame per day against the line of 3.
+
 ## Set it up
 
 In a React Native or Expo app, `npx @keyframerdev/wizard --products vitals` does steps 1 and 2 for you, and waits for the first session: see [@keyframerdev/wizard](../getting-started/wizard.md).

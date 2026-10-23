@@ -25,6 +25,7 @@ It works with React Native, Flutter, iOS (UIKit and SwiftUI) and Android (Views 
 | Install the desktop app | [Desktop app](getting-started/desktop.md) |
 | Record and scrub | [Recording and scrubbing](panel/recording.md) |
 | Understand a problem it reported | [Problems](problems/index.md) |
+| Catch worklet crashes and motion mistakes in React Native code before it runs | [Static checks](problems/static-checks.md) |
 | Fail a pull request on a motion regression | [Running in CI](ci/running.md) |
 | Let a coding agent use it | [MCP server](agents/mcp-server.md), [Agent skills](agents/skills.md) |
 | Look up a command or a variable | [CLI](reference/cli.md), [Environment variables](reference/environment.md) |
@@ -37,7 +38,7 @@ It works with React Native, Flutter, iOS (UIKit and SwiftUI) and Android (Views 
 - **SDKs** that go into your app, in development builds: the npm package `@keyframerdev/inspector` (React Native), the Swift package `KeyframerInspector`, the Maven artifacts `dev.keyframer:*`, and the Dart package `keyframer_inspector`.
 - **The panel**, where you record, scrub, read problems and tune numbers. React Native apps can open it inside Expo's dev tools. Every platform can open it inside the desktop app.
 - **The desktop app**, Keyframer Inspector, which hosts the local relay the native SDKs connect to, the panel, a recordings library and an MCP server.
-- **The `keyframer-inspect` command**, from the npm package: an MCP server, `ci`, `fix` and `symbolicate`.
+- **The `keyframer-inspect` command**, from the npm package: an MCP server, `ci`, `fix`, `lint` and `symbolicate`.
 - **Motion Vitals**, for production: small MIT reporters that go into store builds (`@keyframerdev/vitals`, `KeyframerVitals`, `dev.keyframer:vitals`, `keyframer_vitals`) and a dashboard on keyframer.dev that groups slow frames by screen, animation, version and device. See [Motion Vitals](vitals/index.md).
 
 ## Status
