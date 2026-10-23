@@ -1,6 +1,6 @@
 {
   "name": "@keyframerdev/vitals",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Motion Vitals for React Native: slow frames and janky animations from production, by screen and call site",
   "license": "MIT",
   "private": true,
