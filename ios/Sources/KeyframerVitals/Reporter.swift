@@ -107,12 +107,16 @@ final class Reporter {
     /// queue, the queue is tried 10 s, 1, 5 and 30 minutes later, and the config is fetched 10 s later
     /// when the cached one is a day old.
     func start() {
+        // The config is asked again once stale even while it says off: a paused project, or a usage period
+        // that starts over, turns reporting back on only through a new config. A 401 or 410 stops asking.
+        if !(store.stopUntil.map { $0 > env.wallNow() } ?? false) {
+            env.after(10) { [weak self] in self?.refreshConfigIfStale() }
+        }
         guard Policy.allows(config: config, stopUntil: store.stopUntil, now: env.wallNow()) else { return }
         if let checkpoint = store.takeCheckpoint() { store.enqueue(checkpoint) }
         for delay in Self.retryDelays {
             env.after(delay) { [weak self] in self?.flushPending() }
         }
-        env.after(10) { [weak self] in self?.refreshConfigIfStale() }
         if env.isActive() { didBecomeActive() }
     }
 
@@ -398,6 +402,9 @@ final class Reporter {
         if config.stop == true { return kill() }
         if !Policy.allows(config: config, stopUntil: store.stopUntil, now: env.wallNow()) {
             endSession()
+        } else if foreground, session == nil {
+            // On again while the app is in front (it launched with the project off): a session starts now.
+            resumeSession()
         }
     }
 

@@ -198,6 +198,8 @@ export class VitalsController {
   /** Reports waiting in the retry store (no retry timer while it is empty). */
   private queued = 0
   private configTimer: unknown = null
+  /** Off because the cached config says so (paused, disabled, an old SDK), not by consent: a fresh config may turn it back on. */
+  private offByConfig = false
   private meters: Meters | null = null
   private screen = 'app'
   private reduceMotion = false
@@ -249,8 +251,13 @@ export class VitalsController {
     // silent for up to a day after someone turns them on.
     const dev = opts.environment === 'development'
     this.config = dev ? null : (cached?.config ?? null)
+    const fresh = !dev && cached && this.env.wall() - cached.at < Math.max(60, cached.config.ttlSec) * 1000
     if (!this.allowed()) {
       this.enabled = false
+      // Still ask once the answer is stale: a project paused and resumed, or a usage period that starts
+      // over, turns reporting back on only through a new config.
+      this.offByConfig = true
+      if (!fresh) this.configTimer = this.env.setTimeout(() => void this.fetchConfig(run), START_DELAY_MS)
       return
     }
     // Last launch's leftovers: a checkpoint (the app was killed with a window open) and failed uploads.
@@ -265,7 +272,6 @@ export class VitalsController {
     if (run !== this.run) return
     this.retryStep = 0
     this.scheduleRetry()
-    const fresh = !dev && cached && this.env.wall() - cached.at < Math.max(60, cached.config.ttlSec) * 1000
     if (!fresh) this.configTimer = this.env.setTimeout(() => void this.fetchConfig(run), START_DELAY_MS)
     await this.beginSession(run)
   }
@@ -281,6 +287,7 @@ export class VitalsController {
   async stop(drop: boolean): Promise<void> {
     this.run++
     this.enabled = false
+    this.offByConfig = false
     this.endSampling()
     this.clearTimers()
     if (drop) this.queued = 0
@@ -786,6 +793,11 @@ export class VitalsController {
     if (!this.allowed()) {
       await this.stop(false)
       return
+    }
+    // Off only because of the cached config, and the project is on again: start, with this config cached.
+    if (this.offByConfig && this.opts && this.meters) {
+      this.offByConfig = false
+      return this.start(this.opts, this.meters)
     }
     // Reduce Motion is reported only while the project collects it.
     if (!config.collect.reduceMotion) this.setReduceMotion(false)

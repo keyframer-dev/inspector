@@ -327,6 +327,26 @@ final class ReporterTests: XCTestCase {
         XCTAssertFalse(r.isSampled)
     }
 
+    func testAProjectOffAtLaunchAsksAgainOnceStaleAndStartsWhenOn() {
+        let p = FakePlatform()
+        let store = temporaryStore { p.wall }
+        var off = VitalsConfig.defaults
+        off.enabled = false
+        off.sampleRate = 1
+        store.saveConfig(off)
+        p.advance(2 * 86_400_000)
+        var on = off
+        on.enabled = true
+        p.fetched = .success(on)
+        let r = make(p, store: store)
+        r.start()
+        r.didBecomeActive()
+        XCTAssertNil(r.session, "off by the cached config")
+        p.advance(10_000)
+        XCTAssertEqual(p.fetches, 1, "asked again: the cached answer is two days old")
+        XCTAssertTrue(r.isSampled, "the project is on again: a session starts at once")
+    }
+
     func testModelsOffAndDevelopmentReports() {
         let p = FakePlatform()
         let store = temporaryStore { p.wall }
@@ -355,6 +375,8 @@ final class ReporterTests: XCTestCase {
         let r = make(p, store: store)
         r.start()
         XCTAssertNil(r.session)
-        XCTAssertTrue(p.scheduled.isEmpty, "nothing scheduled either")
+        XCTAssertEqual(p.scheduled.count, 1, "only the config check, so a later config can turn it back on")
+        p.advance(10_000)
+        XCTAssertEqual(p.fetches, 0, "not before the cached config is stale")
     }
 }

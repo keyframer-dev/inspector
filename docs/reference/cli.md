@@ -20,6 +20,7 @@ npx keyframer-inspect <command> [options]
 | `keyframer-inspect fix` | The fix loop with Claude Code, Codex or another agent |
 | `keyframer-inspect lint` | Worklet crashes and motion mistakes in React Native code, without running the app |
 | `keyframer-inspect symbolicate <file> --map <map>` | Maps a preview build's raw stacks to source lines |
+| `keyframer-inspect import <trace>` | Turns an Expo Exact frame trace into a recording (experimental) |
 | `keyframer-inspect --code <code>` | Joins a pairing room and writes the Keyframer editor's edits to disk |
 
 `ci --help` and `fix --help` print their flags.
@@ -134,6 +135,21 @@ npx keyframer-inspect symbolicate glitch.kfrec.json --map index.android.bundle.m
 ```
 
 Writes `glitch.symbolicated.kfrec.json` by default, with files and lines in every stack. Use the source map of the exact build that made the recording.
+
+## keyframer-inspect import
+
+```sh
+npx keyframer-inspect import trace.json [--out file.kfrec.json] [--root .]
+```
+
+Experimental. Reads a frame trace from an [Expo Exact](https://github.com/expo/exact) app and saves it as a recording, in `.keyframer/recordings` under `--root` (where the desktop app, the panel and the MCP server find it) or in `--out`. Exact writes two kinds, both from Apple hosts:
+
+| Trace | Made by | What the recording gets |
+|---|---|---|
+| A frame recording | `startTrace_EXPERIMENTAL()` and `stopTrace_EXPERIMENTAL()` in the app, in any build | The frame rate of each scroll segment, each late frame with what the main thread did in it, and a note for each drag, glide and bounce |
+| A development trace | Save Trace in Exact's dev menu, or `agent.mjs trace --pid` | Every frame Exact kept, the late ones with their work, and the busiest `.contract` lines |
+
+A frame Exact blames on the system's frame rate (`rate`), with the main thread free, becomes a note rather than a dropped frame, and the frame a development build launched with is a note too. Problems in the recording are worded for Exact: a long frame is charged to the part of Exact's work that took it (the runner and layout, a list building rows, text, images, a scroll handler, Core Animation's commit), each with its own fix in Contract's terms. Exact's trace fields can still change; what the import could not place is listed when it finishes.
 
 ## Join a pairing room
 

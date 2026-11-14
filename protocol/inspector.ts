@@ -290,8 +290,12 @@ export type InspectorCommit = { t: number; ms: number; components: InspectorComm
 export type InspectorTask = {
   t: number
   ms: number
-  /** Native SDKs add their own (a run loop source, a message on the main Looper). */
-  kind: 'handler' | 'effect' | 'timer' | 'scenario' | (string & {})
+  /**
+   * Native SDKs add their own (a run loop source, a message on the main Looper). `phase`: a named part
+   * of the frame's work the platform measured (a framework's layout pass, Core Animation's commit),
+   * whose `name` reads as a subject: "Core Animation's commit".
+   */
+  kind: 'handler' | 'effect' | 'timer' | 'scenario' | 'phase' | (string & {})
   /** onPress, useEffect, setTimeout, requestAnimationFrame… */
   name: string
   /** `file:line` where it is written (handlers, effects); timers carry the stack that scheduled them instead. */

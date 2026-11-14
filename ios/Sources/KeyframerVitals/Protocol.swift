@@ -27,7 +27,7 @@ enum Vitals {
     static let defaultSampleRate = 0.1
 
     static let sdkName = "KeyframerVitals"
-    static let sdkVersion = "0.1.0"
+    static let sdkVersion = "0.1.1"
 
     /// Index of the histogram bucket for a frame that missed `missed` vsyncs.
     static func bucket(missed: Int) -> Int {

@@ -39,6 +39,7 @@ export function frameworkName(app: AppLike): string {
     swiftui: 'SwiftUI',
     'android-views': 'Android Views',
     compose: 'Jetpack Compose',
+    exact: 'Expo Exact',
   }
   const f = app?.framework ?? 'react-native'
   return names[f] ?? f
@@ -136,6 +137,21 @@ const GENERIC: Advice = {
   burst: 'Stagger them, or drive them from one progress value, so they do not all start in one frame.',
 }
 
+// Expo Exact, from its traces (keyframer-inspect import): the runner, the kernel's layout and data
+// sources placed on main run on one runtime thread that main waits for, so their time is main's.
+const EXACT: Advice = {
+  callback:
+    'Move the heavy work out of this action: do less per runner turn, shape data inside its data source, or run the source on its own thread with typescript.placement (or rust.placement) "worker" in app.json, whose answers then arrive outside the action\'s transaction.',
+  untimed:
+    "The Main thread was busy with work Exact does not time: a native module, UIKit or AppKit outside Exact's phases, or the system. Save Trace in the dev menu writes a development trace with each site's work; Instruments' Time Profiler shows the function.",
+  startedWhileBlocked: 'It started while the Main thread was busy, so its first frames waited. Move the blocking work out of the action that starts it, or start the animation first.',
+  screenMount:
+    "The new screen's first rows, text and images were built in these frames, during the transition. Keep its first frame light: answer each list's first window short and load the rest from reachend.",
+  frameUnknown:
+    "Rendering took too long: offscreen passes over moving content (backdrop-filter and materials, filter, clip-path and masks, opacity on a box with children, text-shadow). The trace's render inventory lists them by node: keep them off what scrolls or animates.",
+  burst: "Stagger them with a delay in their animation or transition (by the row's index), so the Main thread does not start every animation in one frame.",
+}
+
 /** The fixes for the app's framework. */
 export function adviceFor(app: AppLike): Advice {
   const f = app?.framework
@@ -144,7 +160,58 @@ export function adviceFor(app: AppLike): Advice {
   if (f === 'uikit') return IOS
   if (f === 'swiftui') return SWIFTUI
   if (f === 'android-views' || f === 'compose') return ANDROID
+  if (f === 'exact') return EXACT
   return GENERIC
+}
+
+/**
+ * The parts of a frame Exact's Apple host times on the main thread (its host phases), and Core
+ * Animation's commit, by Exact's own keys: what a `phase` task from an Exact trace is called, and how
+ * it is fixed. `anchor` and `draw` are timed on the Mac only.
+ */
+export const EXACT_PHASES: Record<string, { name: string; fix: string }> = {
+  runtime: {
+    name: "Exact's runner and layout",
+    fix: 'The Main thread waited on Exact\'s runtime: the runner handling events, timers and data answers, the kernel laying out, and data sources placed on main. Do less per turn: answer long lists as a window (feed(cursor), moved by reachstart and reachend on the list, with refreshes feed on the mutation), shape data inside its source rather than at the top level of app.ts, and answer only the rows that changed. A source that stays heavy can run on its own thread with typescript.placement (or rust.placement) "worker" in app.json, whose answers then arrive outside the action\'s transaction.',
+  },
+  apply: {
+    name: 'Exact applying changes to its views',
+    fix: 'Each batch that changes what shows runs the presenter, then its pass over navigation, controls and scrollers. Commit less: write state only when it changes (a clock at minute resolution, not every 250 ms), and remove scroll= handlers that write state. A filter on boxes in a list is drawn again after every batch: keep filter off rows.',
+  },
+  rows: {
+    name: 'A list building and reusing its rows',
+    fix: "The list built rows as it scrolled. Exact gives a new row the views of a retired one with the same shape (the same kinds and child counts, in order), so keep rows one shape: a list virtualized=true with one keyed for and one root per row. Inputs, text areas, video, web views, canvases, native views and materials are built new every time, and a list or scroll inside a row stops reuse.",
+  },
+  anchor: {
+    name: 'A list keeping its anchored row in place',
+    fix: 'Rows above the one in view changed size, so the list moved its content to keep that row still. Set estimated-item-height close to the rows\' real height, and keep a row\'s height steady once it shows (images with a width and height, text that does not reflow when its data lands).',
+  },
+  text: {
+    name: 'Measuring and drawing text',
+    fix: 'Text was measured or drawn on the Main thread. New paragraphs draw their first pixels there, and some always draw there: background-clip text, a content-transition (rolling numerals), text under a canvas, and text flowing around shapes. Keep those out of scrolling rows and text that changes every frame, and avoid many new paragraphs in one frame.',
+  },
+  scroll: {
+    name: 'A scroll view callback',
+    fix: 'A scroller\'s callback ran long: its scroll= handler (an action and a runner turn each scroll frame), sticky views, fixed backgrounds and canvases redrawn as it moves. Drop scroll= handlers where you can: page a list from reachstart and reachend, and listen for scrollend to learn that a scroll stopped.',
+  },
+  draw: {
+    name: 'A region reader drawing',
+    fix: 'A paragraph long enough to lay out off the Main thread (64 KB of text, or 16 KB in 256 runs or more) was drawn here. Split long text and Markdown documents into smaller blocks.',
+  },
+  image: {
+    name: 'Putting decoded images on their layers',
+    fix: 'Decoded images were put on their layers, and animated GIF and WebP frames advanced. Land fewer images in one frame and keep few animated images on screen at once; uploading their pixels counts in Core Animation\'s commit.',
+  },
+  commit: {
+    name: "Core Animation's commit (layout and drawing of layers)",
+    fix: 'Core Animation laid out and drew the layers that changed before handing the frame on. It grows with the views laid out and the bitmaps drawn in the frame: change fewer views at once, animate translate, scale, rotate and opacity rather than height (which lays out the box and what follows it every frame), and spread new rows and images over several frames.',
+  },
+}
+
+/** The fix for a `phase` task: Exact's own for its phases, else null. */
+export function phaseFix(app: AppLike, name: string): string | null {
+  if (app?.framework !== 'exact') return null
+  return Object.values(EXACT_PHASES).find((p) => p.name === name)?.fix ?? null
 }
 
 /** What the app's animated values are called: "shared values" on React Native. */
