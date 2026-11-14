@@ -56,6 +56,10 @@ class Launch {
 
   double get now => async.elapsed.inMicroseconds / 1000;
 
+  /// The storage as the reporter's store reads it, on the same fake wall clock. A store on the real clock
+  /// would find the reports, stamped on the base day, older than the retry store keeps them.
+  VitalsStore get store => VitalsStore(storage, wallClock: () => _base + dayOffset * 86400000 + async.elapsed.inMilliseconds);
+
   void start() {
     reporter.start();
     async.flushMicrotasks();
@@ -222,7 +226,7 @@ void main() {
       l.draw();
       l.background();
       expect(l.transport.posts, hasLength(1));
-      expect(wait(async, VitalsStore(l.storage).pending()), hasLength(1));
+      expect(wait(async, l.store.pending()), hasLength(1));
       // The 10 s retry fires while in the background: nothing is sent.
       async.elapse(const Duration(seconds: 15));
       expect(l.transport.posts, hasLength(1));
@@ -231,7 +235,7 @@ void main() {
       async.elapse(const Duration(minutes: 1));
       expect(l.transport.posts, hasLength(2));
       expect(l.transport.posts[1], l.transport.posts[0]);
-      expect(wait(async, VitalsStore(l.storage).pending()), isEmpty);
+      expect(wait(async, l.store.pending()), isEmpty);
     });
   });
 
@@ -241,7 +245,7 @@ void main() {
       l.transport.script.add(413);
       l.draw();
       l.background();
-      expect(wait(async, VitalsStore(l.storage).pending()), isEmpty);
+      expect(wait(async, l.store.pending()), isEmpty);
     });
   });
 
@@ -252,7 +256,7 @@ void main() {
       l.transport.script.add(410);
       l.draw();
       l.background();
-      expect(wait(async, VitalsStore(storage).pending()), isEmpty);
+      expect(wait(async, l.store.pending()), isEmpty);
       async.elapse(const Duration(seconds: 31));
       l.foreground();
       expect(l.reporter.measuring, isFalse);
@@ -272,7 +276,7 @@ void main() {
       l.transport.body = fixture('ingest-response-stop.json');
       l.draw();
       l.background();
-      expect(wait(async, VitalsStore(l.storage).isOff()), isTrue);
+      expect(wait(async, l.store.isOff()), isTrue);
       async.elapse(const Duration(seconds: 31));
       l.foreground();
       expect(l.reporter.measuring, isFalse);
@@ -285,7 +289,7 @@ void main() {
       // The fixture config, asking for keyframer_vitals 1.0.0; this is 0.1.0.
       final json = jsonDecode(fixture('config.json')) as Map<String, dynamic>;
       json['minSdk'] = {...(json['minSdk'] as Map), 'flutter': '1.0.0'};
-      VitalsStore(storage).saveConfig(VitalsConfig.fromJson(json)!);
+      VitalsStore(storage, wallClock: () => _base + async.elapsed.inMilliseconds).saveConfig(VitalsConfig.fromJson(json)!);
       async.flushMicrotasks();
       final l = Launch(async, storage: storage)..start();
       expect(l.reporter.measuring, isFalse);
@@ -310,12 +314,12 @@ void main() {
       l.draw();
       l.background();
       l.foreground();
-      expect(wait(async, VitalsStore(l.storage).pending()), hasLength(1));
+      expect(wait(async, l.store.pending()), hasLength(1));
       final nonce = (l.transport.reports.single['session'] as Map)['nonce'];
       l.reporter.setEnabled(false);
       async.flushMicrotasks();
       expect(l.reporter.measuring, isFalse);
-      expect(wait(async, VitalsStore(l.storage).pending()), isEmpty);
+      expect(wait(async, l.store.pending()), isEmpty);
       async.elapse(const Duration(minutes: 2));
       expect(l.transport.posts, hasLength(1));
       l.reporter.setEnabled(true);
