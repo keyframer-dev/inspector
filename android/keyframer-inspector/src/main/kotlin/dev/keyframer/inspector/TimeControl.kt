@@ -67,25 +67,28 @@ internal class TimeControl(
         clock.frameMs = 1000.0 / refreshRate().toDouble().coerceIn(1.0, 1000.0)
         pending.add(s to step)
         if (applying == null) {
-            val cb = Choreographer.FrameCallback { frameTimeNanos ->
-                applying = null
-                val now = frameTimeNanos / 1e6
-                val todo = pending.toList()
-                pending.clear()
-                try {
-                    for ((next, steps) in todo) {
-                        if (next != clock.scale) change(next, now)
-                        if (next == 0.0 && steps != null && steps > 0) clock.step(steps.coerceAtMost(TimeRules.MAX_STEP))
-                    }
-                } catch (e: Throwable) {
-                    Log.w("Keyframer", "time control: $e")
-                }
-                updateLoop()
-            }
+            val cb = Choreographer.FrameCallback { frameTimeNanos -> ownTime.time { applyPending(frameTimeNanos) } }
             applying = cb
             Choreographer.getInstance().postFrameCallback(cb)
         }
         return s
+    }
+
+    /** The editor's changes since the last frame, applied at this frame's time. */
+    private fun applyPending(frameTimeNanos: Long) {
+        applying = null
+        val now = frameTimeNanos / 1e6
+        val todo = pending.toList()
+        pending.clear()
+        try {
+            for ((next, steps) in todo) {
+                if (next != clock.scale) change(next, now)
+                if (next == 0.0 && steps != null && steps > 0) clock.step(steps.coerceAtMost(TimeRules.MAX_STEP))
+            }
+        } catch (e: Throwable) {
+            Log.w("Keyframer", "time control: $e")
+        }
+        updateLoop()
     }
 
     /** The person changed the animator duration scale in the settings while the speed is not 1. */
@@ -96,9 +99,11 @@ internal class TimeControl(
         // known animators put back where they are (in a frame, for exact play times).
         mainHandler.postDelayed({
             Choreographer.getInstance().postFrameCallback {
-                if (original == null || clock.scale <= 0 || !canScale) return@postFrameCallback
-                val at = known().mapNotNull { a -> playTime(a)?.let { a to it } }
-                if (applyDurationScale(clock.scale)) for ((a, p) in at) seek(a, p)
+                ownTime.time {
+                    if (original == null || clock.scale <= 0 || !canScale) return@time
+                    val at = known().mapNotNull { a -> playTime(a)?.let { a to it } }
+                    if (applyDurationScale(clock.scale)) for ((a, p) in at) seek(a, p)
+                }
             }
         }, 250)
     }
@@ -164,7 +169,7 @@ internal class TimeControl(
                 override fun doFrame(frameTimeNanos: Long) {
                     if (loop !== this) return
                     try {
-                        frame(frameTimeNanos / 1e6)
+                        ownTime.time { frame(frameTimeNanos / 1e6) }
                     } catch (e: Throwable) {
                         Log.w("Keyframer", "time control stopped: $e")
                         held.clear()

@@ -128,9 +128,12 @@ npx expo install react-native-view-shot
 Track your navigation container so playback, scrubbing and export go back to the screen that was open:
 
 ```ts
-import { trackNavigation } from '@keyframerdev/inspector/record'
+import { markNavigation, trackNavigation } from '@keyframerdev/inspector/record'
 trackNavigation(navigationRef) // React Navigation's ref, or expo-router's useNavigationContainerRef()
+markNavigation('Checkout', { step: 2 }) // a screen no navigator knows (tabs of your own, a pager)
 ```
+
+Each screen change is a marker named after the route. Two screens of one name in a row (`[id]` with other params, expo-router's `index` in two folders) are two markers, told apart by the route's key, or by their params for `markNavigation`.
 
 ### Scenarios
 

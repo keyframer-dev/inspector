@@ -62,4 +62,18 @@ class TrackingTest {
         assertTrue(!VitalsExtensions.measuring && !VitalsExtensions.started)
         assertNull(VitalsExtensions.start(unnamed!!, 100.0))
     }
+
+    @Test
+    fun aCallsSiteIsReadOnlyWhenARunStartsInASessionThatMeasures() {
+        var asked = 0
+        val runs = Runs.of {
+            asked++
+            null
+        }
+        // Before start no session measures: the stack recorded at the first composition is never read.
+        runs.start(100.0)
+        runs.stop()
+        assertEquals(0, asked)
+        assertEquals(1, runs.started)
+    }
 }

@@ -8,6 +8,7 @@
  */
 
 import type { InspectorCommit, InspectorCommitComponent } from '../../protocol/inspector'
+import { enterInspector, leaveInspector } from './ownTime'
 import { appComponentFile } from './runtime'
 
 /** The parts of a React fiber this reads. */
@@ -156,6 +157,8 @@ export function watchCommits(onCommit: (commit: InspectorCommit) => void, now: (
   if (!h || typeof h.onCommitFiberRoot !== 'function') return () => {}
   const prev = h.onCommitFiberRoot
   const wrapped: NonNullable<DevToolsHook['onCommitFiberRoot']> = function (this: unknown, id, root, ...rest) {
+    // Walking the commit is the inspector's own work (ownTime.ts), not React's.
+    enterInspector()
     try {
       const current = root?.current
       if (current) {
@@ -165,6 +168,8 @@ export function watchCommits(onCommit: (commit: InspectorCommit) => void, now: (
       }
     } catch {
       // A React whose fibers look different: skip this commit rather than break the app's.
+    } finally {
+      leaveInspector()
     }
     return prev.call(this, id, root, ...rest)
   }

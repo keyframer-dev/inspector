@@ -20,7 +20,7 @@ export const goldens = {
     "protocol": 1,
     "sdk": {
       "name": "keyframer_inspector",
-      "version": "0.2.0"
+      "version": "0.3.0"
     },
     "framework": "flutter",
     "osVersion": "26.6.2",
@@ -161,7 +161,8 @@ export const goldens = {
         "t": 334,
         "thread": "js",
         "ms": 34.0,
-        "dropped": 1
+        "dropped": 1,
+        "inspectorMs": 4.0
       },
       {
         "t": 201,

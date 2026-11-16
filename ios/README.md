@@ -17,21 +17,52 @@ visibility markers and render hints. SwiftUI through an opt-in product, `Keyfram
 import KeyframerInspector
 
 // Once the first window is up (SceneDelegate, or the App's init for a UIKit-hosted app).
-#if DEBUG
-KeyframerInspector.start()                                   // simulator: ws://127.0.0.1:8790
-KeyframerInspector.start(.init(host: "192.168.1.20"))        // a device: the Mac's LAN address
-#endif
+KeyframerInspector.start(.init(onlyWhenAsked: true))         // only when launched with -keyframer YES
 ```
 
 It connects to the local relay at `ws://<host>:8790/app?name=<app name>&platform=ios`, sends `hello`,
-and reconnects on its own (0.5 s doubling to 10 s). Release builds do nothing unless
-`allowInRelease: true`. The environment wins over code: `KEYFRAMER_INSPECTOR_HOST`,
-`KEYFRAMER_INSPECTOR_PORT`, and `KEYFRAMER_INSPECTOR=0` (off) or `1` (on, even in release).
+and reconnects on its own (0.5 s doubling to 10 s). The package needs Swift tools 6.1 (Xcode 16.3 or
+later).
 
-A device on the LAN also needs, in the app's Info.plist: `NSLocalNetworkUsageDescription`, and
-`NSAppTransportSecurity > NSAllowsLocalNetworking = YES` for plain `ws://`. For 120 Hz frame
-measurements on ProMotion iPhones, `CADisableMinimumFrameDurationOnPhone = YES` (without it a display
-link runs at 60 Hz at most on iPhone, and frames are counted against 60).
+**Start it only when asked.** The inspector costs the app something while it runs (a display link
+while recording, the stacks of the animations it reports), and a debug build is also what goes on
+people's own phones. With `onlyWhenAsked: true` it starts only when the launch asks for it. Launch
+arguments reach a run from Xcode (the scheme's Arguments), `xcrun simctl launch` and
+`xcrun devicectl device process launch` alike; the environment (the scheme, `SIMCTL_CHILD_` for the
+simulator) wins over them, and both win over code:
+
+| Launch argument | Environment | |
+| --- | --- | --- |
+| `-keyframer YES` (`NO`) | `KEYFRAMER_INSPECTOR=1` (`0`) | On, or off whatever the code says. |
+| `-keyframerHost 192.168.1.20` | `KEYFRAMER_INSPECTOR_HOST` | The relay's host (asks for it too). |
+| `-keyframerPort 18797` | `KEYFRAMER_INSPECTOR_PORT` | The relay's port. |
+| `-keyframerSystem YES` | `KEYFRAMER_INSPECTOR_SYSTEM=1` | `reportSystemAnimations`. |
+
+```sh
+xcrun simctl launch booted com.example.app -keyframer YES
+xcrun devicectl device process launch --device <id> com.example.app -keyframerHost 192.168.1.20
+```
+
+**Release builds** compile the inspector out: Xcode links every package product a target depends on in
+every configuration, so the code is there unless the package leaves it out. Built with the Release
+configuration, `KeyframerInspector`, its core and `KeyframerInspectorSwiftUI` are the same API doing
+nothing (`start` returns false, `withKeyframerAnimation` is `withAnimation`, `.keyframerTrace` is the
+view), and the binary carries none of it (the example app: 4.2 MB before, 0.6 MB after). Calls can stay
+in the app without `#if DEBUG`. To measure an optimized build, turn on the package's `ReleaseBuilds`
+trait (`.package(url: ..., from: ..., traits: ["ReleaseBuilds"])`, or the package's traits in Xcode 26.4
+and later); it then starts with `allowInRelease: true` or `KEYFRAMER_INSPECTOR=1`.
+
+**A device** on the LAN needs the Mac's address (`ipconfig getifaddr en0`) as the host, and
+`NSLocalNetworkUsageDescription` in the app's Info.plist (iOS asks the first time it connects). It only
+matters for debug runs, so keep it out of the shipping Info.plist: set
+`INFOPLIST_KEY_NSLocalNetworkUsageDescription` in the Debug configuration's build settings (it works
+with an `INFOPLIST_FILE` too: the Debug app has the key, the Release one doesn't). Plain `ws://` to the
+Mac's IP address needs no App Transport Security exception: an iOS 26 simulator app with no
+`NSAppTransportSecurity` at all connected to the Mac's LAN address. `NSAllowsLocalNetworking` is
+documented for host names instead (the Mac's `.local` name), so it is only needed for those.
+
+For 120 Hz frame measurements on ProMotion iPhones, `CADisableMinimumFrameDurationOnPhone = YES`
+(without it a display link runs at 60 Hz at most on iPhone, and frames are counted against 60).
 
 For SwiftUI views, add the second product too:
 
@@ -45,7 +76,14 @@ withKeyframerAnimation(.spring(response: 0.5, dampingFraction: 0.6)) { cardOffse
 RoundedRectangle(cornerRadius: 24)
     .offset(y: cardOffset)
     .keyframerTrace("card", value: cardOffset)
+
+SettingsView().keyframerScreen("Settings")                  // names the screen in recordings
 ```
+
+**One target for iOS and macOS.** The inspector is iOS only (UIKit). In a multiplatform target, link
+the products for iOS only (the product's platform filter in the target's Frameworks, Libraries and
+Embedded Content, or `platformFilters` in the project file) and put the imports and calls under
+`#if os(iOS)`.
 
 ### Running it against a relay
 
@@ -71,11 +109,12 @@ the desktop app's; launch the app with `SIMCTL_CHILD_KEYFRAMER_INSPECTOR_PORT=18
 | `registerScenario("bounce") { ... }` | An interaction the panel or an agent can run (`scenario` / `scenarioDone`). |
 | `tap("bounce")` | Fires the control with that accessibility identifier: for scenarios. |
 | `registerReplay { ... }` | What `replay` runs. |
-| `registerNavigator { route, params in ... }` | How playback reaches a recorded screen (a route is the view controller's type name). Without one, playback pops back to it when it is in the navigation stack. |
+| `registerNavigator { route, params in ... }` | How playback reaches a recorded screen (a route is the view controller's type name, or a `.keyframerScreen` name). Without one, playback pops back to it when it is in the navigation stack. |
 | `scrub(toRecordingTime:)` / `endScrub()` | Freeze every animated layer at a moment of the last recording, Core Animation's own timeline. |
 | `note(_:)` | A note marker on the recording. |
 | `withKeyframerAnimation(_:_:)` (SwiftUI) | `withAnimation` reported from its exact call site (`#fileID`, `#line`, `#column`). |
 | `.keyframerTrace("name", value:)` (SwiftUI) | A value as a signal, sampled every frame while SwiftUI animates it; changes made with an animation are `anim` events. |
+| `.keyframerScreen("Settings")` (SwiftUI) | Names the screen the view is: `navigation` markers follow the latest named screen still shown. |
 
 ## How it works
 
@@ -93,10 +132,16 @@ that call site. UIKit's own bookkeeping (`uiFractionalProgress`) and animations 
 stack (the text cursor, keyboard, navigation bar) are left out unless `reportSystemAnimations` is on.
 
 **Call sites.** The stack is taken synchronously inside the swizzle, while the app's animation block
-is still on it (`Thread.callStackSymbols`):
+is still on it, as return addresses only (`backtrace`). Symbols are looked up with `dladdr` and kept
+per address, and only for the app's own frames on the main thread (whether a frame is the app's is told
+from the app images' `__TEXT` ranges, without a lookup); the rest of the stack is read on the way out,
+off the main thread. `Thread.callStackSymbols` looked up every frame on the main thread, in the frame
+the animation started (a SwiftUI stack runs past a hundred frames): recording added the very drops it
+reported. Then:
 
 1. Everything above the swizzled `kf_add` frame is the inspector itself (including compiler thunks
-   emitted into the app's image with no module name) and is cut.
+   emitted into the app's image with no module name) and is cut, and so are the inspector's own
+   modules (told by their mangled names, `18KeyframerInspector`).
 2. App frames are those whose image is the app: its executable (`MyApp`), or `MyApp.debug.dylib`,
    where Xcode 16+ puts app code in debug builds, plus `appModules` you name.
 3. The first app frame that is not compiler glue (reabstraction thunks, `partial apply`) is the
@@ -113,16 +158,23 @@ function and the key path (`closure #1 in CardsViewController.bounce()/position`
 builds and edits, and one block animating two properties is one call. While
 recording, an event also carries `frames` (`lineNumber` 0, with `image`, `offset` into the image from
 `dladdr`, and the raw `symbol`, so the Mac can resolve lines with `atos`; library frames are
-`collapse`d) and a `stack` in the V8 shape the panel parses. Every event carries `durationMs` (delay plus
+`collapse`d) and a `stack` in the V8 shape the panel parses, both worked out once per stack off the
+main thread (with `fn`, the UIKit API read from UIKit's frames). Every event carries `durationMs` (delay plus
 duration times repeats; left out when it repeats forever). **The precise route
 is `trace`**: its `#fileID`/`#line`/`#column` default arguments give the exact place, like the Babel
 plugin does on React Native.
+
+Animations that move no key path are named by what they do: `transition`, and Core Animation's private
+match animations (a layer made to follow another, iOS 26's glass under its buttons) `matchMove` and
+`matchProperty`, with `follows` (the layer followed) in `args[1]`. Neither becomes a signal.
 
 **Signals.** The protocol's samples are scalars, so a layer property becomes one signal per scalar
 (`position` → `position.x`, `position.y`; `transform` → translation, scale, z rotation), with ids like
 `CardsViewController.card/position.y`. The name comes from `track(as:)`, the accessibility identifier,
 the stored property that holds the view (found with `Mirror` up the responder chain), or the type;
-cells add their index path (`icon#0.3`) and sublayers their name. A view shown again takes over its id,
+cells add their index path (`icon#0.3`) and sublayers their name; generic types lose their arguments
+(`ListViewController`). Only a key path the layer reads back as a number becomes a signal (anything
+else would never get a sample, and its visibility markers no track). A view shown again takes over its id,
 so recordings follow it. While recording, every signal is read from `presentation()` on each display
 frame; repeated values are dropped without changing what the panel draws (the last held sample before
 a move is kept). A scroll view joins (`bounds.origin`, its offset, `kind: 'scroll'`) the first time a finger touches it.
@@ -137,6 +189,16 @@ animations report `js`, and `hello` says `threads: { js: { label: 'Main', animat
 `ui` entry: the render server (another process, where Core Animation animations actually run) is out of
 reach, so a hitch there with an idle main thread is not seen, and an animation already handed to it
 keeps running smoothly while the main thread is blocked.
+
+Each long frame also says how long the inspector itself worked on the main thread in it
+(`inspectorMs`, from 0.5 ms): the swizzled `addAnimation:forKey:` and its stack, SwiftUI stamps and
+traces, sampling, the editor's messages, the batches going out, a screenshot. The app's own code that
+the inspector calls (the original `addAnimation:forKey:`, a replay) is not counted. A drop that would
+not have been one without that work is the inspector's: the panel and the problems leave it out of the
+app's drops, as they do the frames a screenshot took. After a stall the display link first calls back
+late with the previous frame's timestamp; the stall shows on the tick after it, so the inspector's time
+in it waits for that tick. Work the inspector does once is done ahead, off the main thread: the app
+images' ranges and symbol index (at start) and SwiftUI's animation reflection (at the first trace).
 
 **Display and Reduce Motion.** The hello carries `display: { hz, adaptive }` (the key window's screen,
 `UIScreen.maximumFramesPerSecond`; `adaptive` on ProMotion, the highest rate it has reported, so a
@@ -204,8 +266,11 @@ what animates (the call site for colors and paths):
 **Touches and screens.** `-[UIApplication sendEvent:]` is swizzled: touches become `touch` markers on
 the recording's clock (`UITouch.timestamp` is the same clock as `CACurrentMediaTime`), at most one move
 per finger per 8 ms, in screen points. `-[UIViewController viewDidAppear:]` gives `navigation` markers
-for the app's own controllers (not containers; `UIHostingController` counts), plus the screen on top
-when recording starts. App state and keyboard notifications become `appState` and `keyboard` markers.
+for the app's own controllers (not containers; SwiftUI's hosting controllers count, a sheet's too),
+named by their class without generic arguments, plus the screen on top when recording starts. A
+window's root hosting controller is `App`: in a SwiftUI `App` it holds every screen, so name them with
+`.keyframerScreen("Settings")` (below). App state and keyboard notifications become `appState` and
+`keyboard` markers.
 
 **Playback and capture.** `playback` pins recorded values in time order, one display frame at a time.
 A pin is an animation of the inspector's own (`kf.pin.<path>`, from = to = value, added last so it
@@ -306,13 +371,16 @@ bun Tools/fixtures.ts > Tests/KeyframerInspectorCoreTests/Fixtures/messages.json
 
 ```
 Package.swift
-Sources/KeyframerInspectorCore/   protocol types, stack parsing and demangling, frame meter,
+Sources/KeyframerInspectorCore/   protocol types, stacks (return addresses, symbols, demangling), frame meter,
                                   key paths and values, animation descriptions, sample compression,
                                   time control math, visibility and render hint rules, recorders,
-                                  the source index (call sites to file and line)
-Sources/KeyframerInspector/       public API, connection, swizzles, signals, playback and scrubbing,
-                                  window clocks (time), layer watch (visibility, hints)
-Sources/KeyframerInspectorSwiftUI/ withKeyframerAnimation, .keyframerTrace, SwiftUI animation descriptions
+                                  the source index (call sites to file and line), launch options,
+                                  named screens
+Sources/KeyframerInspector/       public API, connection, outbox (stacks and JSON off the main thread),
+                                  swizzles, signals, playback and scrubbing, window clocks (time),
+                                  layer watch (visibility, hints), the compiled-out API (Release)
+Sources/KeyframerInspectorSwiftUI/ withKeyframerAnimation, .keyframerTrace, .keyframerScreen, SwiftUI
+                                  animation descriptions, the compiled-out API (Release)
 Tests/                            Core and SwiftUI description tests (macOS and iOS), timeline tests (iOS)
 Tools/                            relay.ts, editor.ts, fixtures.ts
 Example/                          the example app, its UI test, and the project generator
@@ -326,7 +394,8 @@ share), and SwiftUI has no public hook that sees every animation. So SwiftUI is 
 through the `KeyframerInspectorSwiftUI` product, and the honest split is:
 
 **Automatic, without the module.** Frames (the display link meter), touches, scenarios, the connection,
-`navigation` markers for `UIHostingController`s (a subclass names the screen), time control for
+`navigation` markers for hosting controllers (`App` for the window's root, a subclass's name, a
+sheet's `PresentationHostingController`), time control for
 whatever SwiftUI hands to Core Animation (UIKit views inside `UIViewRepresentable`, some system
 transitions), and render hints and visibility for those layers.
 
@@ -352,20 +421,60 @@ SwiftUI animates it, spring overshoot included. It works through public SwiftUI 
 
 `withKeyframerAnimation` stamps its call site on the transaction it starts (a transaction key, iOS 17;
 on iOS 15 and 16 the update that follows within 100 ms takes it), so each traced value it changes is
-reported from its line; one that changes no traced value is reported on its own, without a target.
-While recording it also carries its stack.
+reported from its line; one that changes no traced value is reported on its own. While recording it
+also carries its stack (return addresses, read off the main thread once however many traced values it
+moves).
+
+**What a `withKeyframerAnimation` moved, traced or not.** SwiftUI runs its animations by writing its
+layers' model values every frame (no CAAnimation), so while recording, each `withKeyframerAnimation`
+reads the key window's layers on every frame while they move (at least 0.4 s, until 0.3 s after the
+last change, at most 3 s). A layer that changed on two frames and went past half a point (a hundredth
+of opacity, half a percent of scale) moved; layers that started on the same frame and moved by the same
+amounts are one group, the first standing for the rest, so a sliding page of thirty layers is one
+curve. Each group becomes layer signals of that call site, sampled like any other from then on and
+recorded from the frame it started (`SidePage.NavigationStack/position.x`, `SwiftUICardsView.shape/opacity`):
+named after the call site's owner and what SwiftUI drew (`drawing`, `shape`, `image`, `view`, `glass`,
+numbered per call site), the container a `UIViewControllerRepresentable` hosts (`NavigationStack`), or a
+view of the app's own class like any layer. UIKit's bars, glass and cells move along and are left out.
+A property that starts later (an ease-in turns before it grows) joins when it does. The event of a
+`withKeyframerAnimation` no traced value took has the first of them as its target, so the panel shows its
+curve. It costs a walk of the layer tree per frame, about 0.3 ms for 700 layers on a Mac's simulator,
+only while recording and an animation runs, and counted in `inspectorMs`; a layer's kind is asked only
+when it first changes, and only the runtime class names are read (building a SwiftUI view's generic type
+name made the first walk 150 ms). A plain `withAnimation` or an
+implicit `.animation` is not seen (nothing marks it).
+
+**With `.keyframerScreen("name")`.** The view is a named screen while it is shown (`onAppear` to
+`onDisappear`): the route is the latest named screen still shown, so a sheet or a pushed view is the
+route while it is up and the one under it once it goes. A swap (one screen appearing as the other goes,
+in either order) is one marker. A new name renames the screen in place, for a pager that keeps its
+pages mounted: `PagerView().keyframerScreen(page.title)`. Once a screen is named, a hosting controller
+appearing means the named screen on top.
+
+**Helpers.** A trace is named after the file it is written in (`#fileID`), so a helper of the app's
+that wraps `.keyframerTrace` or `withKeyframerAnimation` makes every signal the helper's. Pass the
+caller's place on, or name the owner:
+
+```swift
+func pageSlide(_ name: String, offset: CGFloat, file: String = #fileID, filePath: String = #filePath,
+               line: Int = #line, column: Int = #column) -> some View {
+    keyframerTrace(name, value: offset, file: file, filePath: filePath, line: line, column: column)
+}
+// or: keyframerTrace(name, value: offset, owner: "SidePage")
+```
 
 **What needs care.** Put `.keyframerTrace` inside (before) the `.animation` modifiers that animate the
 same value, so it sees their animation. In a list, give each row its own name (`"card#\(index)"`).
-Values the app animates outside a trace (most of a SwiftUI screen) are not seen. Slow motion reaches
+Values the app animates outside a trace are seen only as the layers a `withKeyframerAnimation` moved
+(above), not as the app's own values. Slow motion reaches
 animations that start inside a traced view or from `withKeyframerAnimation` (SwiftUI fixes an
 animation's speed when it starts, so one already running keeps its speed); pause and step reach Core
 Animation only. Playback cannot write a traced value back (`writable: false`): SwiftUI state belongs to
-the app. Not covered yet: `keyframeAnimator`, `phaseAnimator`, `matchedGeometryEffect`, and navigation
-from `NavigationStack` paths.
+the app. Not covered yet: `keyframeAnimator`, `phaseAnimator`, `matchedGeometryEffect`, and screens not
+named with `.keyframerScreen` (a `NavigationStack` path is not read).
 
-Off (the inspector not started, or a release build), `withKeyframerAnimation` is `withAnimation` and a
-trace costs a struct copy per animation frame.
+Not started, `withKeyframerAnimation` is `withAnimation` and a trace costs a struct copy per animation
+frame. In a Release build all three are compiled out (plain SwiftUI).
 
 ## Motion Vitals (`KeyframerVitals`)
 

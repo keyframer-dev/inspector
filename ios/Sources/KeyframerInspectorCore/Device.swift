@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// The device the app runs on, so a relay or a CI runner can tell two apps apart (an iPhone 16 Pro and
@@ -104,3 +105,4 @@ public struct InspectorDevice: Codable, Hashable, Sendable {
         return String(cString: bytes)
     }
 }
+#endif

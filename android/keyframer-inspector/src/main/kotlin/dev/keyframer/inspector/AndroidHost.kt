@@ -28,6 +28,7 @@ import dev.keyframer.inspector.core.FrameLoop
 import dev.keyframer.inspector.core.Host
 import dev.keyframer.inspector.core.Marker
 import dev.keyframer.inspector.core.Screen
+import dev.keyframer.inspector.core.ScreenRoutes
 import java.io.ByteArrayOutputStream
 import java.lang.ref.WeakReference
 import java.util.concurrent.Callable
@@ -39,7 +40,8 @@ import kotlin.math.roundToInt
  * The platform side of the session: which activity is on top, touches on its window, screens as
  * navigation markers, the app going to the background, screenshots, and navigating back to a screen;
  * the display's refresh rate and the motion settings (with their changes as markers), the visibility of
- * tracked views while recording, and the animation speed (see [TimeControl]).
+ * tracked views while recording, and the animation speed (see [TimeControl]). Each callback it gets on
+ * the main thread is timed as the inspector's own work (see OwnTime).
  */
 internal class AndroidHost(
     private val app: Application,
@@ -69,49 +71,88 @@ internal class AndroidHost(
     private val alive = ArrayList<WeakReference<Activity>>()
     private var top: WeakReference<Activity>? = null
     private var started = 0
-    /** The screen as markers name it: the resumed activity, or what the app set with Keyframer.setRoute. */
+    /** The screen as markers name it: the resumed activity's route (see [screens]). */
     var route: String? = null
         private set
     private var routeParams: Map<String, Any?>? = null
+
+    /**
+     * What each activity is called: the screens it declares (KfScreen), else the route the app set for
+     * it, else its class name. A burst of declared changes (one screen leaving as the next enters) shows
+     * once, on the next turn of the main thread.
+     */
+    private val screens = ScreenRoutes(MainScheduler) { ownTime.time { topActivity?.let { showRouteOf(it) } } }
 
     val topActivity: Activity? get() = top?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
 
     /** The newest activity, even before it resumes: what a tracked animator created in onCreate belongs to. */
     val currentActivity: Activity? get() = alive.lastOrNull { it.get()?.isDestroyed == false }?.get()
 
+    /**
+     * The activity a route the app names belongs to: the newest one that is not going away, which is
+     * the one on top, or one being created over it (a Navigation listener fires before onResume). The
+     * resumed one when the inspector started after the others were created.
+     */
+    private val routeOwner: Activity?
+        get() = alive.lastOrNull { ref -> ref.get()?.let { !it.isFinishing && !it.isDestroyed } == true }?.get() ?: topActivity
+
+    /**
+     * Keyframer.setRoute: remembered for its activity, so resuming it (back from the background, or from
+     * a permission dialog) keeps the name instead of the activity's. Shown now when that activity is on
+     * top, else when it resumes; before any activity, shown as it is.
+     */
     fun setRoute(name: String, params: Map<String, Any?>?) {
+        val owner = routeOwner ?: return show(name, params)
+        screens.set(owner, name, params)
+        if (owner === topActivity) showRouteOf(owner)
+    }
+
+    /** A screen KfScreen declares while it is composed (in `owner`, else the activity on top); again: renamed. */
+    fun declareScreen(token: Any, name: String, owner: Activity?) {
+        screens.declare(owner ?: routeOwner ?: return, token, name)
+    }
+
+    fun undeclareScreen(token: Any) = screens.undeclare(token)
+
+    private fun showRouteOf(activity: Activity) {
+        val r = screens.routeOf(activity, activity.javaClass.simpleName)
+        show(r.name, r.params)
+    }
+
+    private fun show(name: String, params: Map<String, Any?>?) {
         if (name == route && params == routeParams) return
         route = name
         routeParams = params
         markerSink?.invoke(Marker.Navigation(AndroidClock.nowMs().toLong(), name, params))
     }
 
-    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = ownTime.time {
         alive.add(WeakReference(activity))
         wrapWindow(activity)
     }
 
-    override fun onActivityStarted(activity: Activity) {
+    override fun onActivityStarted(activity: Activity) = ownTime.time {
         if (started++ == 0 && markerSink != null) markerSink?.invoke(Marker.AppState(AndroidClock.nowMs().toLong(), "active"))
     }
 
-    override fun onActivityResumed(activity: Activity) {
+    override fun onActivityResumed(activity: Activity) = ownTime.time {
         top = WeakReference(activity)
         wrapWindow(activity)
-        setRoute(activity.javaClass.simpleName, null)
+        showRouteOf(activity)
     }
 
     override fun onActivityPaused(activity: Activity) = Unit
 
-    override fun onActivityStopped(activity: Activity) {
+    override fun onActivityStopped(activity: Activity) = ownTime.time {
         if (--started == 0) markerSink?.invoke(Marker.AppState(AndroidClock.nowMs().toLong(), "background"))
     }
 
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
-    override fun onActivityDestroyed(activity: Activity) {
+    override fun onActivityDestroyed(activity: Activity) = ownTime.time {
         alive.removeAll { it.get() == null || it.get() === activity }
         if (top?.get() === activity) top = null
+        screens.forget(activity)
         onActivityDestroyed.invoke(activity)
     }
 
@@ -122,6 +163,8 @@ internal class AndroidHost(
 
     /** Tracked views to watch while recording (set by Keyframer: animator targets and signal views). */
     var visibilityTargets: () -> List<ViewTarget> = { emptyList() }
+    /** Whether the recording gets samples of a signal (set by Keyframer: InspectorSession.sampled). */
+    var sampled: (String) -> Boolean = { false }
     private var visibility: VisibilityWatcher? = null
 
     /** Whether any activity is started: in the background, views are not checked (that is an appState marker). */
@@ -132,7 +175,7 @@ internal class AndroidHost(
         lastMove.clear()
         route?.let { onMarker(Marker.Navigation(AndroidClock.nowMs().toLong(), it, routeParams)) }
         visibility?.stop()
-        val watcher = VisibilityWatcher({ visibilityTargets() }, { inForeground }) { m -> markerSink?.invoke(m) }
+        val watcher = VisibilityWatcher({ visibilityTargets() }, { inForeground }, { sampled(it) }) { m -> markerSink?.invoke(m) }
         visibility = watcher
         watcher.start()
         return Cancellable {
@@ -146,7 +189,7 @@ internal class AndroidHost(
         val window = activity.window ?: return
         val current = window.callback ?: return
         if (current is TouchCallback) return
-        window.callback = TouchCallback(current) { ev -> onTouch(ev) }
+        window.callback = TouchCallback(current) { ev -> ownTime.time { onTouch(ev) } }
     }
 
     /** Touches in screen points (dp), timed by the event (uptime ms: the session's monotonic clock). */
@@ -181,7 +224,9 @@ internal class AndroidHost(
 
     override fun navigateTo(route: String, params: Map<String, Any?>?): Boolean {
         if (route == this.route) return false
-        if (navigator?.invoke(route, params) == true) return true
+        // The app's own navigation, run on request: its frames are the app's.
+        val navigate = navigator
+        if (navigate != null && ownTime.app { navigate(route, params) }) return true
         val cls = activityClass(route) ?: return false
         val from: Context = topActivity ?: app
         val intent = Intent(from, cls)
@@ -250,7 +295,7 @@ internal class AndroidHost(
     private fun pixelCopy(window: Window, bitmap: Bitmap, then: () -> Unit, done: (String?, String?) -> Unit) {
         if (Build.VERSION.SDK_INT < 26) return
         PixelCopy.request(window, bitmap, { result ->
-            if (result == PixelCopy.SUCCESS) then() else done(null, "PixelCopy failed ($result)")
+            ownTime.time { if (result == PixelCopy.SUCCESS) then() else done(null, "PixelCopy failed ($result)") }
         }, mainHandler)
     }
 
@@ -307,10 +352,10 @@ internal class AndroidHost(
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = Unit
         override fun onDisplayRemoved(displayId: Int) = Unit
-        override fun onDisplayChanged(displayId: Int) {
-            if (displayId != Display.DEFAULT_DISPLAY) return
+        override fun onDisplayChanged(displayId: Int) = ownTime.time {
+            if (displayId != Display.DEFAULT_DISPLAY) return@time
             val hz = currentHz()
-            if (hz == lastHz) return
+            if (hz == lastHz) return@time
             lastHz = hz
             markerSink?.invoke(Marker.Display(AndroidClock.nowMs().toLong(), hz))
         }
@@ -330,10 +375,10 @@ internal class AndroidHost(
     private var lastReduceMotion = false
 
     private val settingsObserver = object : ContentObserver(mainHandler) {
-        override fun onChange(selfChange: Boolean, uri: Uri?) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) = ownTime.time {
             val reduce = animatorScaleSetting() == 0f
             time?.systemScaleChanged()
-            if (reduce == lastReduceMotion) return
+            if (reduce == lastReduceMotion) return@time
             lastReduceMotion = reduce
             markerSink?.invoke(Marker.Accessibility(AndroidClock.nowMs().toLong(), reduce))
         }
@@ -361,6 +406,7 @@ internal class AndroidHost(
     }
 
     fun dispose() {
+        screens.dispose()
         runCatching { displays.unregisterDisplayListener(displayListener) }
         runCatching { app.contentResolver.unregisterContentObserver(settingsObserver) }
         visibility?.stop()

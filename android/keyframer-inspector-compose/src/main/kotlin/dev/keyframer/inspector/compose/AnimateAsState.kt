@@ -167,8 +167,7 @@ internal fun <T, V : AnimationVector> rememberValueTracker(fn: String, label: St
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val tracker = remember(animatable) {
-        val stack = Throwable().stackTrace
-        locate(stack)?.let { ValueTracker(it, stack, fn, label, animatable, components, scope).also { t -> t.ownedBy(context) } }
+        atCallSite { at, stack -> ValueTracker(at, stack, fn, label, animatable, components, scope).also { t -> t.ownedBy(context) } }
     }
     DisposableEffect(tracker) {
         tracker?.attach()

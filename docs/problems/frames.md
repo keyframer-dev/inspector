@@ -9,6 +9,8 @@ section: Problems
 
 Each long frame is traced to what ran in it. Drops with the same cause become one problem. The fixes below are the text the inspector prints for each framework.
 
+Each long frame also says how long the inspector itself worked in it. A frame that would not have been long without that work, or one a recorder's screenshot made long, is the inspector's own: the trace says so, and it is left out of problems, comparisons and `ci`.
+
 Some kinds need data only one SDK sends. React commits, JS tasks and UI-thread worklet times come from the React Native Babel plugin, so `slow-render`, `render-storm`, `ui-work`, `layout-anim`, `thread-hops` and (with Reanimated's calls) `restart-storm` are React Native problems.
 
 ### JS task

@@ -39,4 +39,6 @@ dependencies {
     // The oldest Compose this works with: an app's newer Compose wins the version resolution.
     api("androidx.compose.animation:animation:1.7.6")
     implementation("androidx.compose.ui:ui:1.7.6")
+    // KfNavigation: only for apps that use Navigation (they bring it; nothing here loads it otherwise).
+    compileOnly("androidx.navigation:navigation-runtime:2.7.7")
 }

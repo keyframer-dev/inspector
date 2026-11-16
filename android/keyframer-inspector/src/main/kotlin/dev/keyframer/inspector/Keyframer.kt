@@ -9,6 +9,7 @@ import android.view.View
 import dev.keyframer.inspector.core.CallSites
 import dev.keyframer.inspector.core.InspectorSession
 import dev.keyframer.inspector.core.OkHttpSockets
+import dev.keyframer.inspector.core.OwnTime
 import dev.keyframer.inspector.core.Scenario
 import dev.keyframer.inspector.core.Signal
 import dev.keyframer.inspector.core.SignalSite
@@ -23,7 +24,11 @@ data class KeyframerConfig(
     val appName: String? = null,
     /** Connect in a non-debuggable build too. Off by default: the inspector is a development tool. */
     val enableInRelease: Boolean = false,
-    /** Packages of the app's own animation helpers, skipped when looking for the call site. */
+    /**
+     * Packages of the app's own animation helpers, skipped when looking for the call site (and collapsed
+     * in an animation's frames). A helper that wraps kfTrack or kfAnimate*AsState otherwise makes every
+     * value it animates the helper's own line.
+     */
     val libraryPrefixes: List<String> = emptyList(),
     /**
      * The source set's folder on your machine, where call-site paths (`com/example/app/MainActivity.kt`)
@@ -91,10 +96,11 @@ object Keyframer {
         time = t
         h.time = t
         h.visibilityTargets = { animators.visibilityTargets() + signals.mapNotNull { it.viewTarget() } }
+        h.sampled = { id -> session?.sampled(id) == true }
         animators.topWindow = { h.topActivity?.window }
         h.startWatching()
         val url = InspectorSession.relayUrl(config.host ?: defaultHost(), config.port, name)
-        val s = InspectorSession(url, OkHttpSockets(), MainScheduler, AndroidClock, h)
+        val s = InspectorSession(url, OkHttpSockets(), MainScheduler, AndroidClock, h, libraryPrefixes = config.libraryPrefixes, ownTime = ownTime)
         s.onOverrides = { animators.applyOverrides(it) }
         session = s
         for ((n, sc) in scenarios) unregister[n] = s.registerScenario(n, sc)
@@ -138,13 +144,19 @@ object Keyframer {
      * Reports this animator every time it starts (duration, delay, repeats, interpolator, keyframes and
      * where it was written) and records its value and play time while the panel records. An AnimatorSet
      * tracks each of its children. Returns the animator, for chaining.
+     *
+     * Where it was written comes from the stack: recorded here (`Throwable()`), and read off the main
+     * thread when nothing needs it within the frame (see AnimatorTracker.track), so an app that makes an
+     * animator on every tap does not read a stack on every tap.
      */
     @JvmStatic
     @JvmOverloads
     fun <T : Animator> track(animator: T, name: String? = null): T {
         if (session == null) return animator
-        val stack = Throwable().stackTrace
-        onMain { animators.track(animator, name, host?.currentActivity, stack, config.libraryPrefixes) }
+        timed {
+            val taken = Throwable()
+            onMain { animators.track(animator, name, host?.currentActivity, taken, config.libraryPrefixes) }
+        }
         return animator
     }
 
@@ -156,8 +168,10 @@ object Keyframer {
     @JvmStatic
     fun <T : Animator> track(animator: T, name: String?, view: View?): T {
         if (session == null) return animator
-        val stack = Throwable().stackTrace
-        onMain { animators.track(animator, name, host?.currentActivity, stack, config.libraryPrefixes, view) }
+        timed {
+            val taken = Throwable()
+            onMain { animators.track(animator, name, host?.currentActivity, taken, config.libraryPrefixes, view) }
+        }
         return animator
     }
 
@@ -183,7 +197,8 @@ object Keyframer {
     @JvmOverloads
     fun signal(name: String, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? {
         if (session == null) return null
-        return addSignal(name, null, read, write, Throwable().stackTrace)
+        // Read now: the signal's id is part of what this returns. Made once, where the value is set up.
+        return timed { addSignal(name, null, read, write, Throwable().stackTrace) }
     }
 
     /**
@@ -194,7 +209,7 @@ object Keyframer {
     @JvmOverloads
     fun signal(name: String, view: View?, read: () -> Float, write: ((Float) -> Unit)? = null): Signal? {
         if (session == null) return null
-        return addSignal(name, view, read, write, Throwable().stackTrace)
+        return timed { addSignal(name, view, read, write, Throwable().stackTrace) }
     }
 
     private fun addSignal(name: String, view: View?, read: () -> Float, write: ((Float) -> Unit)?, stack: Array<StackTraceElement>): Signal? {
@@ -209,7 +224,13 @@ object Keyframer {
         return sig
     }
 
-    /** Names the screen for markers and playback, for apps that change screens without activities (fragments, Navigation). */
+    /**
+     * Names the screen for markers and playback, for apps that change screens without activities
+     * (fragments, Navigation). The name belongs to the activity on top (or the one being created): it
+     * stays when that activity comes back from the background or from behind a dialog, and its class
+     * name is used again only for a new activity. In Compose, a KfScreen that is composed names the
+     * screen over it.
+     */
     @JvmStatic
     @JvmOverloads
     fun setRoute(route: String, params: Map<String, Any?>? = null) = onMain {
@@ -281,10 +302,17 @@ object Keyframer {
     // ── for keyframer-inspector-compose (see KeyframerExtensions) ────────────────────────────────────
 
     internal val sessionOrNull: InspectorSession? get() = session
+    internal val ownTimeOf: OwnTime get() = ownTime
     internal val timeClock get() = time?.clock
     internal val libraryPrefixes: List<String> get() = config.libraryPrefixes
     internal fun setFramework(name: String) {
         host?.framework = name
+    }
+    internal fun declareScreen(token: Any, name: String, owner: Activity?) = onMain {
+        host?.declareScreen(token, name, owner)
+    }
+    internal fun undeclareScreen(token: Any) = onMain {
+        host?.undeclareScreen(token)
     }
 }
 

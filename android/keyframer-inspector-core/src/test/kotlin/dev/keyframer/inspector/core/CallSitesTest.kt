@@ -71,6 +71,13 @@ class CallSitesTest {
     }
 
     @Test
+    fun `frames collapse the app's own helpers too, given their prefixes`() {
+        val s = arrayOf(f("com.acme.motion.Fade", "run", "Fade.kt", 9), f("com.acme.Home", "show", "Home.kt", 30))
+        assertEquals(listOf(false, false), CallSites.frames(s).map { it.collapse })
+        assertEquals(listOf(true, false), CallSites.frames(s, extraLibraryPrefixes = listOf("com.acme.motion.")).map { it.collapse })
+    }
+
+    @Test
     fun `frames for the trace collapse library frames`() {
         val frames = CallSites.frames(stack)
         assertEquals("dev.keyframer.example.MainActivity.onCreate", frames.first().methodName)

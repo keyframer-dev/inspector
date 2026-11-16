@@ -1,9 +1,13 @@
 import 'call_site.dart';
+import 'own_time.dart';
 import 'protocol.dart';
 
 /// What a connected inspector receives from the instrumented code (the Dart side of React Native's
 /// `__KF_INSPECTOR__` hook).
 abstract interface class KfSink {
+  /// An animation started. A start's `site` and `frames` come from its stack, printed when they are
+  /// first read: a sink that reads them later (the client, when it sends) keeps that work out of the
+  /// frame the animation started in.
   void anim(KfCallSite site, List<Object?> args, {List<KfStackFrame>? frames, num? durationMs});
   void signal(KfSignal signal);
   void unsignal(String id);
@@ -11,11 +15,14 @@ abstract interface class KfSink {
 
 /// One animated value the inspector can sample and write: an AnimationController, a ValueNotifier.
 class KfSignal {
+  /// `frame` is where it was created when that is known already; `created`, the stack trace taken
+  /// where it was created, to be read for it only when [frame] is first asked (see [KfRuntime.register]).
   KfSignal({
     required this.read,
     required this.write,
     this.name,
-    this.frame,
+    KfStackFrame? frame,
+    StackTrace? created,
     this.fallbackKey,
     this.beginPlayback,
     this.endPlayback,
@@ -23,7 +30,8 @@ class KfSignal {
     this.owner,
     this.writable = true,
     this.prop,
-  });
+  }) : _frame = frame,
+       _created = created;
 
   final double Function() read;
   final void Function(double v) write;
@@ -43,8 +51,23 @@ class KfSignal {
   /// The property it animates, when known (`InspectorSignalSite.prop`).
   final String? prop;
 
-  /// Where it was created, when the stack trace said.
-  final KfStackFrame? frame;
+  /// Where it was created, when the stack trace said. A creation stack trace is read here, once, the
+  /// first time it is asked: printing a trace costs far more than taking it, and a value made while no
+  /// inspector is installed never needs it.
+  KfStackFrame? get frame {
+    final trace = _created;
+    if (trace != null) {
+      _created = null;
+      _frame = KfLazyStack.of(trace).appFrame;
+    }
+    return _frame;
+  }
+
+  KfStackFrame? _frame;
+  StackTrace? _created;
+
+  /// False while [frame] is a stack trace not read yet.
+  bool get located => _created == null;
 
   /// Stands in for the location when there is no frame (split debug info): the name, or a counter.
   final String? fallbackKey;
@@ -106,11 +129,17 @@ class KfRuntime {
   KfSink? _sink;
   KfSink? get sink => _sink;
 
-  /// True while an inspector is connected: the instrumented code only does work then.
+  /// True once an inspector is installed (connectKeyframerInspector does it right away, before its
+  /// socket connects, and it stays installed while the socket reconnects): the instrumented code only
+  /// does work then, including reading the stacks of animation starts.
   bool get active => _sink != null;
 
   final Map<String, KfSignal> signals = {};
   final Map<String, Set<int>> _slots = {};
+
+  /// Values registered while no inspector is installed whose creation stack is not read yet: they get
+  /// their ids, and read their stacks, when one is.
+  final List<KfSignal> _unplaced = [];
 
   /// Live edits by call site id, param path → value (`InspectorOverrides`).
   Map<String, Map<String, num>> overrides = {};
@@ -125,7 +154,12 @@ class KfRuntime {
       s.id = s.site(this).id;
       signals[s.id!] = s;
     }
-    for (final s in all) {
+    final waiting = List.of(_unplaced);
+    _unplaced.clear();
+    for (final s in waiting) {
+      _place(s);
+    }
+    for (final s in [...all, ...waiting]) {
       sink.signal(s);
     }
   }
@@ -134,8 +168,22 @@ class KfRuntime {
     if (identical(_sink, sink)) _sink = null;
   }
 
-  /// Registers a value under its call site, in the first free instance slot. Returns its id.
-  String register(KfSignal s) {
+  /// Registers a value under its call site, in the first free instance slot, and returns its id. While
+  /// no inspector is installed, a value whose creation stack is not read yet waits instead (null): it
+  /// is placed by [install], so an app that never connects never reads a creation stack.
+  String? register(KfSignal s) {
+    if (_sink == null && !s.located) {
+      _unplaced.add(s);
+      return null;
+    }
+    return KfOwnTime.measure(() {
+      final id = _place(s);
+      _sink?.signal(s);
+      return id;
+    });
+  }
+
+  String _place(KfSignal s) {
     final taken = _slots.putIfAbsent(s.baseKey, () => <int>{});
     var n = 0;
     while (taken.contains(n)) {
@@ -147,37 +195,58 @@ class KfRuntime {
     final id = s.site(this).id;
     s.id = id;
     signals[id] = s;
-    _sink?.signal(s);
     return id;
   }
 
   void unregister(KfSignal s) {
+    if (_unplaced.remove(s)) return;
     final id = s.id;
     if (id == null) return;
-    if (identical(signals[id], s)) signals.remove(id);
-    _slots[s.baseKey]?.remove(s._slot);
-    s.id = null;
-    _sink?.unsignal(id);
+    KfOwnTime.measure(() {
+      if (identical(signals[id], s)) signals.remove(id);
+      _slots[s.baseKey]?.remove(s._slot);
+      s.id = null;
+      _sink?.unsignal(id);
+    });
   }
 
-  /// `durationMs`: how long it runs, delay included, when known (omitted for loops and physics).
-  void reportAnim(KfCallSite site, List<Object?> args, {List<KfStackFrame>? frames, num? durationMs}) =>
-      _sink?.anim(site, args, frames: frames, durationMs: durationMs);
+  /// `durationMs`: how long it runs, delay included, when known (omitted for loops and physics). `site`
+  /// may be worked out only when it is first read (an animation start's, see KfAnimationController).
+  void reportAnim(KfCallSite site, List<Object?> args, {List<KfStackFrame>? frames, num? durationMs}) {
+    final sink = _sink;
+    if (sink != null) KfOwnTime.measure(() => sink.anim(site, args, frames: frames, durationMs: durationMs));
+  }
 
   // ── Navigation ──────────────────────────────────────────────────────────
   KfRoute? _route;
+  Object? _screen;
   final Set<void Function(KfRoute)> _routeListeners = {};
   final Set<KfNavigator> _navigators = {};
 
   /// The screen the app is on (t is unused here: markers place it on the recording's clock).
   KfRoute? get currentRoute => _route;
 
-  void emitNavigation(String route, [Map<String, Object?>? params]) {
-    if (_route?.route == route) return;
+  /// The app is on `route` now: a navigation marker while recording. `screen` is the screen itself
+  /// (KfNavigatorObserver passes the Route): another screen under the same name (two pages without a
+  /// name, one route pushed again) is a change too, as are other `params`; the same screen reported
+  /// again is not.
+  void emitNavigation(String route, [Map<String, Object?>? params, Object? screen]) {
+    final was = _route;
+    if (was != null && was.route == route && identical(_screen, screen) && _sameParams(was.params, params)) return;
     _route = KfRoute(0, route, params);
+    _screen = screen;
     for (final l in _routeListeners.toList()) {
       l(_route!);
     }
+  }
+
+  static bool _sameParams(Map<String, Object?>? a, Map<String, Object?>? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (!b.containsKey(e.key) || b[e.key] != e.value) return false;
+    }
+    return true;
   }
 
   void Function() tapNavigation(void Function(KfRoute) fn) {
@@ -239,8 +308,10 @@ class KfRuntime {
     _sink = null;
     signals.clear();
     _slots.clear();
+    _unplaced.clear();
     overrides = {};
     _route = null;
+    _screen = null;
     _routeListeners.clear();
     _navigators.clear();
     replay = null;

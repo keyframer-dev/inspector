@@ -439,8 +439,22 @@ async function motionSettings(cardY: string) {
   const swiftCard = session.samples.filter((s) => s.id === 'SwiftUICardsView.card')
   const lowest = Math.min(...swiftCard.map((s) => s.v))
   check('the SwiftUI card is sampled every frame, overshoot included', swiftCard.length > 10 && lowest < -122, `${swiftCard.length} samples, lowest ${lowest.toFixed(1)}`)
+  // Nothing traces the star: its withKeyframerAnimation still has a curve, from the layers SwiftUI moved.
+  const turn = session.anims.find((a) => a.site.fn === 'withAnimation' && a.site.target !== 'card' && a.site.target !== null && a.t !== undefined)
+  const turned = turn?.site.target ? session.samples.filter((s) => s.id === turn.site.target) : []
+  const moved = [...session.signals.keys()].filter((id) => id.startsWith('SwiftUICardsView.') && (id.includes('/transform.') || id.includes('/opacity')))
+  check(
+    'an untraced withKeyframerAnimation records what it moved',
+    !!turn && new Set(turned.map((s) => Math.round(s.v * 100))).size > 5,
+    turn ? `${turn.site.id} → ${turn.site.target}: ${turned.length} samples; signals ${moved.join(', ')}` : `no target; signals ${moved.join(', ')}`,
+  )
   const dotX = session.samples.filter((s) => s.id === 'SwiftUICardsView.dot/x')
   check('a traced point is two signals', new Set(dotX.map((s) => s.v)).size > 5 && session.signals.has('SwiftUICardsView.dot/y'), `${dotX.length} samples of dot/x`)
+  // Named with .keyframerScreen: the route while it shows (never its hosting controller's class), and
+  // the UIKit screen under it once it is popped.
+  const navs = session.markers.flatMap((m) => (m.kind === 'navigation' ? [m.route] : []))
+  const named = navs.indexOf('SwiftUI cards')
+  check('.keyframerScreen names the SwiftUI screen, and the one under it comes back', named >= 0 && navs.slice(named + 1).includes('CardsViewController') && !navs.includes('SwiftUICardsController'), navs.join(' → '))
 }
 
 async function touches(seconds: number) {

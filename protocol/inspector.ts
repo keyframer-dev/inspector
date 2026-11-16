@@ -55,7 +55,8 @@ export type InspectorSignalSite = {
   kind?: 'value' | 'scroll' | 'time'
   /**
    * The property it animates, when the SDK knows one (a Flutter implicit animation: 'opacity',
-   * 'scale', 'position'; several comma-joined, 'size,color'). The problems engine reads 'opacity',
+   * 'scale', 'position'; several comma-joined, 'size,color'; the layers an iOS withKeyframerAnimation
+   * moved: 'position', 'size', 'opacity', 'scale', 'rotation'). The problems engine reads 'opacity',
    * 'alpha' and colors as fades, which Reduce Motion allows.
    */
   prop?: string
@@ -260,8 +261,14 @@ export type InspectorSample = { id: string; t: number; v: number }
 
 /** How smoothly a thread ran over the window that ended at `t` (same clock as samples), while recording. */
 export type InspectorFrameStat = { t: number; thread: InspectorThread; fps: number; dropped: number }
-/** One long frame on a thread: it ended at `t`, took `ms` and skipped `dropped` frames. */
-export type InspectorFrameDrop = { t: number; thread: InspectorThread; ms: number; dropped: number }
+/**
+ * One long frame on a thread: it ended at `t`, took `ms` and skipped `dropped` frames. `inspectorMs`:
+ * how long the inspector itself worked on that thread during the frame (taking stacks, sampling,
+ * encoding, handling the editor's messages), rounded to 0.1 ms, when it was 0.5 ms or more. A drop
+ * that would not have been one without that work is the inspector's, not the app's: the analysis
+ * leaves it out of the app's drops, as it does the frames a screenshot took.
+ */
+export type InspectorFrameDrop = { t: number; thread: InspectorThread; ms: number; dropped: number; inspectorMs?: number }
 /** The frames a recording saw, kept beside its samples in the editor. */
 export type InspectorRecordedFrames = { stats: InspectorFrameStat[]; drops: InspectorFrameDrop[] }
 /** One React commit while recording: it ended at `t`, rendered for `ms`, and the components that rendered most. */

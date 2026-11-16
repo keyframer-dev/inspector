@@ -59,6 +59,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             try await Task.sleep(nanoseconds: 1_600_000_000)
             SwiftUIDemoModel.shared.shift()
             try await Task.sleep(nanoseconds: 900_000_000)
+            SwiftUIDemoModel.shared.turn()
+            try await Task.sleep(nanoseconds: 900_000_000)
         }
         KeyframerInspector.registerScenario("back") {
             nav.popToRootViewController(animated: true)

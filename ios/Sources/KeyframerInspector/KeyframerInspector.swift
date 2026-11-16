@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import UIKit
 @_exported import KeyframerInspectorCore
@@ -8,6 +8,7 @@ import UIKit
 ///     #if DEBUG
 ///     KeyframerInspector.start()                                   // ws://127.0.0.1:8790
 ///     KeyframerInspector.start(.init(host: "192.168.1.20"))        // a device, against the Mac
+///     KeyframerInspector.start(.init(onlyWhenAsked: true))         // only with -keyframer YES
 ///     #endif
 ///
 /// Once started, every Core Animation animation the app's code starts (UIView.animate,
@@ -16,17 +17,18 @@ import UIKit
 public enum KeyframerInspector {
     public struct Configuration {
         /// The relay's host. The simulator reaches the Mac at 127.0.0.1; a device needs the Mac's LAN
-        /// address (and the app's Info.plist needs NSLocalNetworkUsageDescription and
-        /// NSAllowsLocalNetworking). `KEYFRAMER_INSPECTOR_HOST` in the environment wins.
+        /// address (and the app's Info.plist needs NSLocalNetworkUsageDescription). Given at launch,
+        /// `-keyframerHost` or `KEYFRAMER_INSPECTOR_HOST` in the environment wins.
         public var host: String
         public var port: Int
         /// The name the panel shows. Defaults to the bundle's display name.
         public var appName: String
         /// Images besides the app's executable whose frames count as app code (embedded frameworks
-        /// of your own), by image name as `Thread.callStackSymbols` prints it.
+        /// of your own), by the binary's file name (`MyKit` for `MyKit.framework/MyKit`).
         public var appModules: [String]
-        /// Report animations started by UIKit itself too (keyboard, navigation bars, the text cursor).
-        /// Off: only animations with an app frame on the stack, or inside `trace`, are reported.
+        /// Report animations started by UIKit itself too (keyboard, navigation bars, the text cursor,
+        /// iOS 26's glass). Off: only animations with an app frame on the stack, or inside `trace`, are
+        /// reported. `-keyframerSystem YES` at launch turns it on.
         public var reportSystemAnimations: Bool
         /// Lets the panel export frames (`capture`).
         public var captureScreen: Bool
@@ -38,6 +40,11 @@ public enum KeyframerInspector {
         /// to it, which the panel opens in an editor and "Apply to code" writes to. `KEYFRAMER_ROOT` in the
         /// environment wins (in the scheme's Run environment: `$(SRCROOT)`).
         public var sourceRoot: String?
+        /// Start only when asked for at launch: `-keyframer YES` or `-keyframerHost <address>` as launch
+        /// arguments (what `xcrun simctl launch` and `xcrun devicectl device process launch` pass), or
+        /// `KEYFRAMER_INSPECTOR=1` in the environment. The inspector costs the app something while it
+        /// runs, and a debug build is also what goes on people's own phones.
+        public var onlyWhenAsked: Bool
 
         public init(
             host: String? = nil,
@@ -48,19 +55,22 @@ public enum KeyframerInspector {
             captureScreen: Bool = true,
             trackScrollViews: Bool = true,
             allowInRelease: Bool = false,
-            sourceRoot: String? = nil
+            sourceRoot: String? = nil,
+            onlyWhenAsked: Bool = false
         ) {
             let env = ProcessInfo.processInfo.environment
-            self.host = env["KEYFRAMER_INSPECTOR_HOST"] ?? host ?? "127.0.0.1"
-            self.port = env["KEYFRAMER_INSPECTOR_PORT"].flatMap(Int.init) ?? port ?? 8790
+            let launch = LaunchOptions.current
+            self.host = launch.host ?? host ?? "127.0.0.1"
+            self.port = launch.port ?? port ?? 8790
             let info = Bundle.main.infoDictionary
             self.appName = appName ?? (info?["CFBundleDisplayName"] as? String) ?? (info?["CFBundleName"] as? String) ?? "app"
             self.appModules = appModules
-            self.reportSystemAnimations = reportSystemAnimations
+            self.reportSystemAnimations = launch.reportSystemAnimations ?? reportSystemAnimations
             self.captureScreen = captureScreen
             self.trackScrollViews = trackScrollViews
             self.allowInRelease = allowInRelease
             self.sourceRoot = (env["KEYFRAMER_ROOT"] ?? sourceRoot).flatMap { $0.isEmpty ? nil : $0 }
+            self.onlyWhenAsked = onlyWhenAsked
         }
 
         /// `ws://host:port/app?name=<app name>&platform=ios`, the relay's app endpoint.
@@ -75,19 +85,22 @@ public enum KeyframerInspector {
         }
     }
 
-    /// Connects to the relay and starts watching animations. Does nothing in release builds unless
-    /// `allowInRelease` is set, or when `KEYFRAMER_INSPECTOR=0` is in the environment.
+    /// Connects to the relay and starts watching animations. Does nothing when turned off at launch
+    /// (`-keyframer NO`, `KEYFRAMER_INSPECTOR=0`), in release builds unless `allowInRelease` is set or
+    /// `KEYFRAMER_INSPECTOR=1` is in the environment, and with `onlyWhenAsked` unless it was asked
+    /// for at launch (`LaunchOptions`).
     ///
     /// `filePath` (the caller's, filled in by the compiler): without a `sourceRoot`, the folder of the
     /// file that calls `start` is where the app's Swift sources are read from (in the simulator), so
     /// animations found on the stack get the file and line of their function.
     @MainActor @discardableResult
     public static func start(_ configuration: Configuration = Configuration(), filePath: StaticString = #filePath) -> Bool {
-        let env = ProcessInfo.processInfo.environment["KEYFRAMER_INSPECTOR"]
-        if env == "0" { return false }
+        let launch = LaunchOptions.current
+        if launch.enabled == false { return false }
         #if !DEBUG
-            if !configuration.allowInRelease && env != "1" { return false }
+            if !configuration.allowInRelease && !launch.enabledByEnvironment { return false }
         #endif
+        if configuration.onlyWhenAsked && !launch.asked { return false }
         Inspector.shared?.stop()
         Swizzles.installOnce()
         let inspector = Inspector(config: configuration, callerFile: "\(filePath)")
@@ -224,6 +237,9 @@ final class WeakBox<T: AnyObject> {
     static var navigator: (@MainActor (String, [String: JSONValue]?) -> Bool)?
     static var names: [ObjectIdentifier: (WeakBox<UIView>, String)] = [:]
     static var tracked: [(layer: WeakBox<CALayer>, keyPaths: [String], file: String, line: Int)] = []
+    /// SwiftUI's `.keyframerScreen`s on screen, kept while no inspector runs too (the first screen
+    /// usually appears before `start`).
+    static var screens = DeclaredScreens()
 
     static var scenarioNames: [String] { scenarios.keys.sorted() }
 

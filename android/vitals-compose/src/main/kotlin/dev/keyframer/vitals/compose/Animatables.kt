@@ -31,7 +31,9 @@ suspend fun <T, V : AnimationVector> Animatable<T, V>.kfAnimateTo(
 ): AnimationResult<T, V> {
     val site = if (VitalsExtensions.measuring) {
         VitalsExtensions.setFramework("Compose")
-        VitalsExtensions.site(Throwable().stackTrace, label.unlessDefault("Animatable"), "Animatable.animateTo")
+        // Read now, at every call: the run needs its site, and one Animatable can be animated from several
+        // places. No stack at all for a labelled Animatable in a build without class names.
+        VitalsExtensions.siteHere(label.unlessDefault("Animatable"), "Animatable.animateTo")()
     } else {
         null
     }

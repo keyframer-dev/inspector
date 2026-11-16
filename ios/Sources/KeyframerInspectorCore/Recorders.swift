@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// Who records what: `record`'s `recorder` (an id each editor keeps for its connection; nil is the one
@@ -43,3 +44,4 @@ public struct Recorders: Hashable, Sendable {
         byId = [:]
     }
 }
+#endif

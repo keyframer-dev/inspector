@@ -23,7 +23,7 @@ class ProtocolTest {
     @Test
     fun hello() {
         assertEquals(
-            """{"type":"hello","role":"app","app":"Example","platform":"android","capture":true,"screen":{"width":411.42857142857144,"height":914.2857142857143,"scale":2.625},"scenarios":["drag card"],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"framework":"android-views","osVersion":"14","build":"debug","threads":{"js":{"label":"Main","animates":true}},"capabilities":["capture","playback","overrides","replay","scenarios"]}""",
+            """{"type":"hello","role":"app","app":"Example","platform":"android","capture":true,"screen":{"width":411.42857142857144,"height":914.2857142857143,"scale":2.625},"scenarios":["drag card"],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"framework":"android-views","osVersion":"14","build":"debug","threads":{"js":{"label":"Main","animates":true}},"capabilities":["capture","playback","overrides","replay","scenarios"]}""",
             Json.encode(
                 AppMessage.Hello(
                     "Example", "android", true, Screen(1080 / 2.625, 2400 / 2.625, 2.625), listOf("drag card"),
@@ -37,7 +37,7 @@ class ProtocolTest {
         )
         // With RenderThread measured, it is the frame thread.
         assertEquals(
-            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"threads":{"js":{"label":"Main","animates":true},"ui":{"label":"RenderThread"}}}""",
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"threads":{"js":{"label":"Main","animates":true},"ui":{"label":"RenderThread"}}}""",
             Json.encode(AppMessage.Hello("a", "android", false, null, emptyList(), threads = linkedMapOf("js" to ThreadInfo("Main", true), "ui" to ThreadInfo("RenderThread")))),
         )
     }
@@ -45,7 +45,7 @@ class ProtocolTest {
     @Test
     fun `hello carries the source root when the app sets one`() {
         assertEquals(
-            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"root":"/Users/me/app/src/main/kotlin"}""",
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"root":"/Users/me/app/src/main/kotlin"}""",
             Json.encode(AppMessage.Hello("a", "android", false, null, emptyList(), root = "/Users/me/app/src/main/kotlin")),
         )
     }
@@ -59,7 +59,7 @@ class ProtocolTest {
         sockets.last.listener.onOpen()
         p.runDue()
         assertEquals(
-            """{"type":"hello","role":"app","app":"Example","platform":"android","capture":true,"screen":{"width":400,"height":800,"scale":2.5},"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"framework":"android-views","threads":{"js":{"label":"Main","animates":true}},"capabilities":["capture","playback","overrides","replay","scenarios"]}""",
+            """{"type":"hello","role":"app","app":"Example","platform":"android","capture":true,"screen":{"width":400,"height":800,"scale":2.5},"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"framework":"android-views","threads":{"js":{"label":"Main","animates":true}},"capabilities":["capture","playback","overrides","replay","scenarios"]}""",
             sockets.last.sent.first(),
         )
     }
@@ -112,7 +112,7 @@ class ProtocolTest {
         val msg = AppMessage.Samples(
             samples = listOf(Sample("cardX", 16, 12.5), Sample("pulse:time", 16, 1200.0)),
             frames = listOf(FrameStat(250, "js", 60, 0)),
-            drops = listOf(FrameDrop(400, "js", 48.3, 2)),
+            drops = listOf(FrameDrop(400, "js", 48.3, 2), FrameDrop(450, "js", 33.4, 1, inspectorMs = 2.5)),
             markers = listOf(
                 Marker.Navigation(0, "MainActivity"),
                 Marker.Touch(10, "start", 0, 200.0, 412.5),
@@ -122,7 +122,7 @@ class ProtocolTest {
             ),
         )
         assertEquals(
-            """{"type":"samples","samples":[{"id":"cardX","t":16,"v":12.5},{"id":"pulse:time","t":16,"v":1200}],"frames":[{"t":250,"thread":"js","fps":60,"dropped":0}],"drops":[{"t":400,"thread":"js","ms":48.3,"dropped":2}],"markers":[{"kind":"navigation","t":0,"route":"MainActivity"},{"kind":"touch","t":10,"phase":"start","id":0,"x":200,"y":412.5},{"kind":"touch","t":30,"phase":"cancel","id":0,"x":200,"y":412.5,"lost":true},{"kind":"appState","t":50,"state":"background"},{"kind":"keyboard","t":60,"visible":true,"height":300}]}""",
+            """{"type":"samples","samples":[{"id":"cardX","t":16,"v":12.5},{"id":"pulse:time","t":16,"v":1200}],"frames":[{"t":250,"thread":"js","fps":60,"dropped":0}],"drops":[{"t":400,"thread":"js","ms":48.3,"dropped":2},{"t":450,"thread":"js","ms":33.4,"dropped":1,"inspectorMs":2.5}],"markers":[{"kind":"navigation","t":0,"route":"MainActivity"},{"kind":"touch","t":10,"phase":"start","id":0,"x":200,"y":412.5},{"kind":"touch","t":30,"phase":"cancel","id":0,"x":200,"y":412.5,"lost":true},{"kind":"appState","t":50,"state":"background"},{"kind":"keyboard","t":60,"visible":true,"height":300}]}""",
             Json.encode(msg),
         )
         // Empty extras are left out; `samples` always goes.
@@ -141,7 +141,7 @@ class ProtocolTest {
     @Test
     fun `hello with the display, the motion settings and the time capability`() {
         assertEquals(
-            """{"type":"hello","role":"app","app":"a","platform":"android","capture":true,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"framework":"compose","capabilities":["capture","playback","overrides","replay","scenarios","time"],"display":{"hz":120,"adaptive":true},"accessibility":{"reduceMotion":false}}""",
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":true,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"framework":"compose","capabilities":["capture","playback","overrides","replay","scenarios","time"],"display":{"hz":120,"adaptive":true},"accessibility":{"reduceMotion":false}}""",
             Json.encode(
                 AppMessage.Hello(
                     "a", "android", true, null, emptyList(),
@@ -160,7 +160,7 @@ class ProtocolTest {
     @Test
     fun `hello with the device`() {
         assertEquals(
-            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.2.0"},"device":{"name":"Pixel 4 API 35","model":"sdk_gphone64_arm64","id":"Pixel_4_API_35","simulator":true}}""",
+            """{"type":"hello","role":"app","app":"a","platform":"android","capture":false,"scenarios":[],"protocol":1,"sdk":{"name":"keyframer-inspector","version":"0.3.0"},"device":{"name":"Pixel 4 API 35","model":"sdk_gphone64_arm64","id":"Pixel_4_API_35","simulator":true}}""",
             Json.encode(AppMessage.Hello("a", "android", false, null, emptyList(), device = DeviceInfo("Pixel 4 API 35", "sdk_gphone64_arm64", "Pixel_4_API_35", true))),
         )
         // A physical device: its model, and nothing that names it.

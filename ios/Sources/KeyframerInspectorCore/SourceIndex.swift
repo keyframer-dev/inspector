@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// Where the app's functions are declared, read from its Swift sources, so a call site found on the
@@ -189,3 +190,4 @@ public struct SourceIndex: Sendable {
         return (owner, String(last))
     }
 }
+#endif

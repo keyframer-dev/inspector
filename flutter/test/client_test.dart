@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
+import 'package:keyframer_inspector/src/call_site.dart' show KfLazyStack;
+import 'package:keyframer_inspector/src/own_time.dart';
 
 import 'support/fakes.dart';
 
@@ -17,17 +19,57 @@ const site = KfCallSite(
   params: [KfParam('1.duration', 700)],
 );
 
+/// A call site that counts how often it is read, and can take time to work out (a stack printed).
+class ReadSite implements KfCallSite {
+  ReadSite([this.cost]);
+
+  final void Function()? cost;
+  int reads = 0;
+
+  KfCallSite get _site {
+    if (reads++ == 0) cost?.call();
+    return site;
+  }
+
+  @override
+  String get id => _site.id;
+  @override
+  String get file => _site.file;
+  @override
+  int get line => _site.line;
+  @override
+  int get column => _site.column;
+  @override
+  String get fn => _site.fn;
+  @override
+  String? get component => _site.component;
+  @override
+  String? get target => _site.target;
+  @override
+  String? get prop => _site.prop;
+  @override
+  List<KfParam> get params => _site.params;
+  @override
+  Map<String, Object?> toJson() => _site.toJson();
+}
+
 void main() {
   late KfRuntime rt;
   late FakeConnector connector;
   late FakeHost host;
+  final ownClock = KfOwnTime.clock;
 
   setUp(() {
     rt = KfRuntime();
     rt.appPackage = 'demo';
     connector = FakeConnector();
     host = FakeHost();
+    // The inspector's own time runs on the real clock: frozen here, so no drop carries any unless a test
+    // says the inspector worked.
+    KfOwnTime.clock = () => 0;
+    KfOwnTime.take();
   });
+  tearDown(() => KfOwnTime.clock = ownClock);
 
   KfInspectorClient makeClient(FakeAsync async, {KfHost? withHost}) => KfInspectorClient(
     url: relayAppUrl(app: 'Demo', platform: 'ios'),
@@ -58,7 +100,7 @@ void main() {
         'screen': {'width': 390, 'height': 844, 'scale': 3},
         'scenarios': <String>[],
         'protocol': 1,
-        'sdk': {'name': 'keyframer_inspector', 'version': '0.2.0'},
+        'sdk': {'name': 'keyframer_inspector', 'version': '0.3.0'},
         'framework': 'flutter',
         'osVersion': '18.6',
         'build': 'debug',
@@ -258,6 +300,79 @@ void main() {
           'collapse': true,
         },
       ]);
+      client.dispose();
+    });
+  });
+
+  test(
+    'an anim is built when its batch goes out: its site read then, its order, eid and times kept from the start',
+    () {
+      fakeAsync((async) {
+        final client = makeClient(async);
+        async.flushMicrotasks();
+        connector.last.receive({
+          'type': 'record',
+          'signalIds': ['*'],
+          'on': true,
+        });
+        async.flushMicrotasks();
+        async.elapse(const Duration(milliseconds: 230));
+        final late = ReadSite();
+        rt.reportAnim(late, [1.0], durationMs: 300);
+        rt.register(TestValue('after', line: 77).signal);
+        expect(late.reads, 0);
+        async.elapse(const Duration(milliseconds: 70));
+        expect(late.reads, greaterThan(0));
+        final [anim, signal] = connector.last.events;
+        expect(anim['kind'], 'anim');
+        expect(anim['eid'], 1);
+        expect(anim['t'], 230);
+        expect(anim['at'], 1700000000230);
+        expect((anim['site'] as Map)['id'], site.id);
+        expect(signal['kind'], 'signal');
+        client.dispose();
+      });
+    },
+  );
+
+  test(
+    'a backlog of starts goes out over several batches, a few ms of building each, none built while disconnected',
+    () {
+      fakeAsync((async) {
+        connector.fail = true;
+        final client = makeClient(async);
+        async.flushMicrotasks();
+        // Each start takes 3 ms to work out (its stack printed).
+        final sites = [
+          for (var i = 0; i < 5; i++) ReadSite(() => async.elapseBlocking(const Duration(milliseconds: 3))),
+        ];
+        for (final s in sites) {
+          rt.reportAnim(s, [1.0]);
+        }
+        async.elapse(const Duration(milliseconds: 300));
+        expect(sites.map((s) => s.reads), everyElement(0));
+        // The relay comes up: the next attempt connects (at 500 ms), and the backlog goes out at most 4 ms of
+        // building per batch, in order.
+        connector.fail = false;
+        async.elapse(const Duration(milliseconds: 500));
+        final batches = connector.last.ofType('events');
+        expect(batches.map((b) => (b['events'] as List).length), [2, 2, 1]);
+        expect(connector.last.events.map((e) => e['eid']), [1, 2, 3, 4, 5]);
+        client.dispose();
+      });
+    },
+  );
+
+  test('a start whose site cannot be worked out is left out, and the batch goes without it', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      rt.reportAnim(ReadSite(() => throw const FormatException('line 99999999999999999999')), [1.0]);
+      rt.reportAnim(site, [1.0]);
+      async.elapse(const Duration(milliseconds: 100));
+      expect(connector.last.events.map((e) => e['eid']), [2]);
+      async.elapse(const Duration(milliseconds: 100));
+      expect(connector.last.ofType('events'), hasLength(1));
       client.dispose();
     });
   });
@@ -577,6 +692,117 @@ void main() {
     expect(jitter.drops, isEmpty);
   });
 
+  test('frame meter: a long frame keeps the inspector\'s own time over it, from 0.5 ms, to a tenth', () {
+    final m = FrameMeter('js');
+    m.tick(0);
+    m.tick(16.7, inspectorMs: 9);
+    m.tick(50, inspectorMs: 3.04);
+    m.tick(83.4, inspectorMs: 0.49);
+    expect(
+      [for (final d in m.drops) d.toJson()],
+      [
+        {'t': 50, 'thread': 'js', 'ms': 33.3, 'dropped': 1, 'inspectorMs': 3.0},
+        {'t': 83, 'thread': 'js', 'ms': 33.4, 'dropped': 1},
+      ],
+    );
+    expect(m.drops.first.at(60).toJson()['inspectorMs'], 3.0);
+  });
+
+  test('own time: the outermost section counts once, the app\'s code inside one does not', () {
+    var now = 0;
+    KfOwnTime.clock = () => now;
+    KfOwnTime.measure(() {
+      now += 1000;
+      KfOwnTime.measure(() => now += 500);
+      KfOwnTime.notOurs(() {
+        now += 4000;
+        // The inspector again, inside the app's code: its own.
+        KfOwnTime.measure(() => now += 200);
+        now += 100;
+      });
+      now += 300;
+    });
+    // Outside every section: nobody's.
+    now += 7000;
+    KfOwnTime.notOurs(() => now += 50);
+    expect(KfOwnTime.take(), 2.0);
+    expect(KfOwnTime.take(), 0);
+    // Taken while a section runs: what it did so far, and the rest next time.
+    KfOwnTime.measure(() {
+      now += 600;
+      expect(KfOwnTime.take(), 0.6);
+      now += 400;
+    });
+    expect(KfOwnTime.take(), 0.4);
+    // A section that throws still ends.
+    expect(() => KfOwnTime.measure(() => throw StateError('x')), throwsStateError);
+    now += 900;
+    expect(KfOwnTime.take(), 0);
+  });
+
+  test('a long frame on the UI isolate carries the inspector\'s own time over it; the raster thread\'s none', () {
+    fakeAsync((async) {
+      KfOwnTime.clock = () => async.elapsed.inMicroseconds;
+      var sampling = Duration.zero;
+      rt.register(
+        KfSignal(
+          read: () {
+            async.elapseBlocking(sampling);
+            return 0.5;
+          },
+          write: (_) {},
+          name: 'heavy',
+          frame: const KfStackFrame('_CardState.initState', 'package:demo/main.dart', 30, 5),
+        ),
+      );
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      connector.last.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.flushMicrotasks();
+      for (var i = 0; i < 3; i++) {
+        async.elapse(const Duration(milliseconds: 17));
+        host.onFrame!();
+      }
+      // A 34 ms frame, 6 ms of it the inspector's (a start's stack printed, say).
+      async.elapse(const Duration(milliseconds: 28));
+      KfOwnTime.measure(() => async.elapseBlocking(const Duration(milliseconds: 6)));
+      host.onFrame!();
+      // The app's code the inspector calls into is not its time: 0.3 ms is too little to say.
+      async.elapse(const Duration(milliseconds: 26));
+      KfOwnTime.measure(() {
+        async.elapseBlocking(const Duration(microseconds: 300));
+        KfOwnTime.notOurs(() => async.elapseBlocking(const Duration(milliseconds: 8)));
+      });
+      host.onFrame!();
+      // The sampling after a frame holds up the next one: its 3 ms go with the next long frame.
+      sampling = const Duration(milliseconds: 3);
+      async.elapse(const Duration(milliseconds: 17));
+      host.onFrame!();
+      sampling = Duration.zero;
+      async.elapse(const Duration(milliseconds: 31));
+      host.onFrame!();
+      // A slow raster frame, while the inspector worked on the UI isolate.
+      KfOwnTime.measure(() => async.elapseBlocking(const Duration(milliseconds: 5)));
+      host.onTimings!([
+        for (var i = 1; i <= 6; i++) KfTiming(rasterEnd: 5000 + i * 16.667, rasterMs: i == 3 ? 40 : 4, buildMs: 3),
+      ]);
+      async.elapse(const Duration(milliseconds: 100));
+      final drops = [
+        for (final b in connector.last.ofType('samples')) ...((b['drops'] as List?) ?? const []).cast<Map>(),
+      ];
+      expect(
+        [for (final d in drops.where((d) => d['thread'] == 'js')) (d['ms'], d['inspectorMs'])],
+        [(34.0, 6.0), (34.3, null), (34.0, 3.0)],
+      );
+      expect(drops.where((d) => d['thread'] == 'ui').single.containsKey('inspectorMs'), isFalse);
+      client.dispose();
+    });
+  });
+
   List<Map> markersOf(FakeSocket s) => [
     for (final b in s.ofType('samples')) ...((b['markers'] as List?) ?? const []).cast<Map>(),
   ];
@@ -825,6 +1051,7 @@ void main() {
 
   test('the scene: watched while recording, visibility as markers, render hints once and in the catalog', () {
     fakeAsync((async) {
+      rt.register(TestValue('a').signal);
       final full = FakeFullHost();
       final client = makeClient(async, withHost: full);
       async.flushMicrotasks();
@@ -863,6 +1090,80 @@ void main() {
       s.receive({'type': 'presence', 'app': true, 'editors': 1, 'cli': false});
       async.flushMicrotasks();
       expect(s.events.where((e) => e['kind'] == 'renderHint'), hasLength(1));
+      client.dispose();
+    });
+  });
+
+  test('visibility markers only for the values being recorded (the others have no samples)', () {
+    fakeAsync((async) {
+      final a = TestValue('a'), b = TestValue('b', line: 20);
+      rt.register(a.signal);
+      rt.register(b.signal);
+      final full = FakeFullHost();
+      final client = makeClient(async, withHost: full);
+      async.flushMicrotasks();
+      final s = connector.last;
+      s.receive({
+        'type': 'record',
+        'signalIds': ['lib/main.dart:10:5'],
+        'on': true,
+      });
+      async.elapse(const Duration(milliseconds: 30));
+      full.onVisibility!('lib/main.dart:20:5', false, 'offscreen');
+      full.onVisibility!('lib/main.dart:10:5', false, 'hidden');
+      async.elapse(const Duration(milliseconds: 100));
+      expect(markersOf(s).where((m) => m['kind'] == 'visibility').map((m) => m['id']), ['lib/main.dart:10:5']);
+      // Another recorder asks for the second value: its markers count from then.
+      s.receive({
+        'type': 'record',
+        'signalIds': ['lib/main.dart:20:5'],
+        'on': true,
+        'recorder': 'agent',
+      });
+      async.flushMicrotasks();
+      full.onVisibility!('lib/main.dart:20:5', true, null);
+      async.elapse(const Duration(milliseconds: 100));
+      expect(markersOf(s).where((m) => m['kind'] == 'visibility').map((m) => m['id']), [
+        'lib/main.dart:10:5',
+        'lib/main.dart:20:5',
+      ]);
+      client.dispose();
+    });
+  });
+
+  test('a start\'s stack is read as far as its call site, the rest only for a recording, when it is sent', () {
+    fakeAsync((async) {
+      final client = makeClient(async);
+      async.flushMicrotasks();
+      KfLazyStack trace() => KfLazyStack('''
+#0      KfAnimationController.forward (package:keyframer_inspector/src/controller.dart:38:7)
+#1      _HomeScreenState.initState (package:demo/main.dart:42:15)
+#2      StatefulElement._firstBuild (package:flutter/src/widgets/framework.dart:5602:5)
+#3      main (package:demo/main.dart:9:3)
+''');
+      final quiet = trace();
+      expect(quiet.appFrame!.line, 42);
+      rt.reportAnim(site, [1.0], frames: quiet);
+      connector.last.receive({
+        'type': 'record',
+        'signalIds': ['*'],
+        'on': true,
+      });
+      async.flushMicrotasks();
+      final recorded = trace();
+      rt.reportAnim(site, [1.0], frames: recorded);
+      // Formatted when its batch is built, between frames: not while the app starts it.
+      expect(recorded.framesRead, 0);
+      async.elapse(const Duration(milliseconds: 100));
+      expect(quiet.framesRead, 2);
+      expect(recorded.framesRead, 4);
+      final anims = connector.last.events.where((e) => e['kind'] == 'anim').toList();
+      expect(anims.first.containsKey('frames'), isFalse);
+      expect(
+        anims.last['stack'],
+        '    at _HomeScreenState.initState (lib/main.dart:42:15)\n    at main (lib/main.dart:9:3)',
+      );
+      expect((anims.last['frames'] as List).map((f) => (f as Map)['lineNumber']), [42, 5602, 9]);
       client.dispose();
     });
   });

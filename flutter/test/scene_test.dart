@@ -447,6 +447,34 @@ void main() {
     });
   });
 
+  testWidgets('a value created again at the same id starts afresh: hidden again is reported again', (tester) async {
+    AnimationController make() =>
+        KfAnimationController(vsync: const TestVSync(), duration: const Duration(seconds: 1), name: 'again');
+    Future<void> hiddenWhileMoving(AnimationController c) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: Center(child: Moving(controller: c, wrap: (w) => Opacity(opacity: 0, child: w)))),
+        ),
+      );
+      c.repeat();
+      await tester.pump();
+      await look(tester);
+      c.stop();
+      await tester.pumpWidget(const SizedBox());
+      c.dispose();
+    }
+
+    final first = make();
+    final id = rt.signals.values.single.id!;
+    await hiddenWhileMoving(first);
+    expect(visibility, [(id, false, 'hidden')]);
+    // Its screen opened again: a new value at the same call site, so the same id.
+    final second = make();
+    expect(rt.signals.values.single.id, id);
+    await hiddenWhileMoving(second);
+    expect(visibility, [(id, false, 'hidden'), (id, false, 'hidden')]);
+  });
+
   group('render hints', () {
     late AnimationController c;
     setUp(() {

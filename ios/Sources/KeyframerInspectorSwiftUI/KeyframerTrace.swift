@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import SwiftUI
 @_spi(SwiftUI) import KeyframerInspector
@@ -19,20 +19,27 @@ import SwiftUI
 
 /// `withAnimation` that the Keyframer inspector reports with this exact call site (`#fileID`, `#line`):
 /// every `.keyframerTrace`d value it changes is an `anim` event from here (`fn: "withAnimation"`), with
-/// the animation's parameters; one that changes no traced value is reported on its own, without a
-/// target. While the inspector is not running it is `withAnimation`, nothing more.
+/// the animation's parameters; one that changes no traced value is reported on its own. While
+/// recording, what it moves on screen becomes signals of this call site even when nothing is traced
+/// (`SidePage.NavigationStack/position.x`: SwiftUI's layers, read every frame until it settles), and
+/// the event's target is the first of them. While the inspector is not running it is
+/// `withAnimation`, nothing more.
 ///
 ///     withKeyframerAnimation(.spring(response: 0.5, dampingFraction: 0.6)) {
 ///         cardOffset = lifted ? -120 : 0
 ///     }
+///
+/// A helper of the app's that wraps it passes its own caller's `file`, `filePath`, `line` and `column`
+/// on, or every call is reported from the helper. `owner` names the component (the file's name
+/// otherwise).
 @discardableResult
 public func withKeyframerAnimation<Result>(
-    _ animation: Animation? = .default,
+    _ animation: Animation? = .default, owner: String? = nil,
     file: String = #fileID, filePath: String = #filePath, line: Int = #line, column: Int = #column,
     _ body: () throws -> Result
 ) rethrows -> Result {
-    let site = TraceCallSite(file: file, filePath: filePath, line: line, column: column)
-    guard Thread.isMainThread, let stamp = MainActor.assumeIsolated({ AnimationStamp.begin(animation, at: site) }) else {
+    let site = TraceCallSite(file: file, filePath: filePath, line: line, column: column, named: owner)
+    guard Thread.isMainThread, let stamp = MainActor.assumeIsolated({ OwnTime.measure { AnimationStamp.begin(animation, at: site) } }) else {
         return try withAnimation(animation, body)
     }
     if #available(iOS 17, *) {
@@ -60,22 +67,48 @@ extension View {
     /// Angle, UnitPoint, or a type of the app's own. Put it inside (before) the `.animation` modifiers
     /// that animate the same value, so it sees their animation. In a list, give each row its own name
     /// (`"card#\(index)"`): instances sharing a name share a signal, the newest one recorded.
+    ///
+    /// The signal is named after the file it is written in. A helper of the app's that wraps it passes
+    /// its own caller's `file`, `filePath`, `line` and `column` on (or every signal is the helper's), or
+    /// names the `owner` (`Owner.name`).
     public func keyframerTrace<V: VectorArithmetic>(
-        _ name: String, value: V,
+        _ name: String, value: V, owner: String? = nil,
         file: String = #fileID, filePath: String = #filePath, line: Int = #line, column: Int = #column
     ) -> some View {
         // Numbers are VectorArithmetic on every iOS; they are Animatable only from iOS 17.
-        modifier(KeyframerTraceModifier(name: name, data: value, shape: .of(value), site: TraceCallSite(file: file, filePath: filePath, line: line, column: column)))
+        modifier(KeyframerTraceModifier(name: name, data: value, shape: .of(value), site: TraceCallSite(file: file, filePath: filePath, line: line, column: column, named: owner)))
     }
 
     /// `.keyframerTrace` for a value that animates through its `animatableData`: CGPoint, CGSize,
     /// CGRect, Angle, UnitPoint, a type of the app's own.
     @_disfavoredOverload
     public func keyframerTrace<V: Animatable>(
-        _ name: String, value: V,
+        _ name: String, value: V, owner: String? = nil,
         file: String = #fileID, filePath: String = #filePath, line: Int = #line, column: Int = #column
     ) -> some View {
-        modifier(KeyframerTraceModifier(name: name, data: value.animatableData, shape: .of(value), site: TraceCallSite(file: file, filePath: filePath, line: line, column: column)))
+        modifier(KeyframerTraceModifier(name: name, data: value.animatableData, shape: .of(value), site: TraceCallSite(file: file, filePath: filePath, line: line, column: column, named: owner)))
+    }
+
+    /// Names the screen this view is, for the inspector's `navigation` markers. In a SwiftUI app every
+    /// screen lives in one hosting controller, so without it a recording only knows `App`. The route is
+    /// the latest named screen still shown: a sheet's or a pushed view's while it is up, the one under
+    /// it once it goes. A new `name` renames it in place (a pager on another page).
+    ///
+    ///     SettingsView().keyframerScreen("Settings")
+    public func keyframerScreen(_ name: String) -> some View {
+        modifier(KeyframerScreenModifier(name: name))
+    }
+}
+
+struct KeyframerScreenModifier: ViewModifier {
+    let name: String
+    @State private var id = UUID()
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear { MainActor.assumeIsolated { SwiftUIBridge.screen(id, appeared: name) } }
+            .onDisappear { MainActor.assumeIsolated { SwiftUIBridge.screenDisappeared(id) } }
+            .onChange(of: name) { name in MainActor.assumeIsolated { SwiftUIBridge.screen(id, renamed: name) } }
     }
 }
 
@@ -87,9 +120,13 @@ struct TraceCallSite: Equatable {
     let filePath: String
     let line: Int
     let column: Int
+    /// The `owner` the app gave, if any.
+    var named: String? = nil
 
-    /// The file's name without its folder and extension: what the panel shows as the component.
+    /// What the panel shows as the component: the given owner, else the file's name without its folder
+    /// and extension.
     var owner: String {
+        if let named, !named.isEmpty { return named }
         let last = file.split(separator: "/").last.map(String.init) ?? file
         return last.hasSuffix(".swift") ? String(last.dropLast(6)) : last
     }
@@ -117,31 +154,37 @@ final class AnimationStamp: @unchecked Sendable {
     let edited: Animation?
     /// What runs: `edited` at the editor's speed.
     let started: Animation?
-    let symbols: [String]?
+    /// Where it was called, while recording: return addresses, read off the main thread once, however
+    /// many traced values it moves.
+    let stack: CapturedStack?
     let at = CACurrentMediaTime()
     /// A traced value reported it.
     var claimed = false
 
-    private init(site: TraceCallSite, original: Animation?, edited: Animation?, started: Animation?, symbols: [String]?) {
+    private init(site: TraceCallSite, original: Animation?, edited: Animation?, started: Animation?, stack: CapturedStack?) {
         self.site = site
         self.original = original
         self.edited = edited
         self.started = started
-        self.symbols = symbols
+        self.stack = stack
     }
 
     @MainActor static func begin(_ animation: Animation?, at site: TraceCallSite) -> AnimationStamp? {
         guard SwiftUIBridge.isRunning else { return nil }
         SwiftUIBridge.markUsed()
+        SwiftUIAnimationInfo.warmUp()
         var edited = animation
         if let a = animation, let edits = SwiftUIBridge.overrides(for: site.id), let e = SwiftUIAnimationInfo(a).applying(edits) { edited = e }
+        let recording = SwiftUIBridge.isRecording
         let stamp = AnimationStamp(
             site: site, original: animation, edited: edited, started: Tracing.atEditorSpeed(edited),
-            symbols: SwiftUIBridge.isRecording ? Thread.callStackSymbols : nil
+            stack: recording ? CapturedStack.capture() : nil
         )
-        // No traced value took it: reported on its own, without a target.
+        // What it moves on screen becomes signals of this call site, traced or not.
+        if recording { SwiftUIBridge.animationBegan(stamp, file: site.path, line: site.line, column: site.column, owner: site.owner) }
+        // No traced value took it: reported on its own, with what it moved as its target.
         DispatchQueue.main.asyncAfter(deadline: .now() + claimWindow) {
-            MainActor.assumeIsolated { stamp.reportIfUnclaimed() }
+            MainActor.assumeIsolated { OwnTime.measure { stamp.reportIfUnclaimed() } }
         }
         return stamp
     }
@@ -159,9 +202,9 @@ final class AnimationStamp: @unchecked Sendable {
         let info = SwiftUIAnimationInfo(edited)
         let callSite = InspectorCallSite(
             id: site.id, file: site.path, line: site.line, column: site.column, fn: "withAnimation",
-            component: site.owner, target: nil, prop: nil, params: info.params
+            component: site.owner, target: SwiftUIBridge.movedSignal(of: self), prop: nil, params: info.params
         )
-        SwiftUIBridge.report(site: callSite, args: [.null, .object(info.config)], durationMs: info.durationMs, symbols: symbols)
+        SwiftUIBridge.report(site: callSite, args: [.null, .object(info.config)], durationMs: info.durationMs, stack: stack)
     }
 }
 
@@ -217,26 +260,31 @@ final class TraceBox: ObservableObject, @unchecked Sendable {
         if last == nil { last = values }
         guard Thread.isMainThread else { return }
         MainActor.assumeIsolated {
-            guard let current = SwiftUIBridge.session else {
-                session = nil
-                return
-            }
-            if session === current, registeredName == name, self.labels == labels { return }
-            SwiftUIBridge.markUsed()
-            session = current
-            registeredName = name
-            self.labels = labels
-            if source.values.count != values.count { source.values = values }
-            let base = "\(site.owner).\(name)"
-            let path = site.path
-            let sites = labels.map { label in
-                InspectorSignalSite(
-                    id: label.isEmpty ? base : "\(base)/\(label)", file: path, line: site.line, column: site.column,
-                    component: site.owner, name: label.isEmpty ? name : "\(name).\(label)", kind: .value, writable: false
-                )
-            }
-            SwiftUIBridge.register(source, sites: sites)
+            OwnTime.measure { register(name: name, labels: labels, site: site, values: values) }
         }
+    }
+
+    @MainActor private func register(name: String, labels: [String], site: TraceCallSite, values: [Double]) {
+        guard let current = SwiftUIBridge.session else {
+            session = nil
+            return
+        }
+        if session === current, registeredName == name, self.labels == labels { return }
+        SwiftUIBridge.markUsed()
+        SwiftUIAnimationInfo.warmUp()
+        session = current
+        registeredName = name
+        self.labels = labels
+        if source.values.count != values.count { source.values = values }
+        let base = "\(site.owner).\(name)"
+        let path = site.path
+        let sites = labels.map { label in
+            InspectorSignalSite(
+                id: label.isEmpty ? base : "\(base)/\(label)", file: path, line: site.line, column: site.column,
+                component: site.owner, name: label.isEmpty ? name : "\(name).\(label)", kind: .value, writable: false
+            )
+        }
+        SwiftUIBridge.register(source, sites: sites)
     }
 
     /// Every frame of an animation.
@@ -259,7 +307,7 @@ final class TraceBox: ObservableObject, @unchecked Sendable {
         let from = source.values
         var transaction = t
         MainActor.assumeIsolated {
-            Tracing.changed(&transaction, from: from, to: target, labels: labels, name: name, site: site)
+            OwnTime.measure { Tracing.changed(&transaction, from: from, to: target, labels: labels, name: name, site: site) }
         }
         t = transaction
     }
@@ -293,7 +341,7 @@ final class TraceBox: ObservableObject, @unchecked Sendable {
             id: siteId, file: location.path, line: location.line, column: location.column,
             fn: stamp == nil ? "Transaction" : "withAnimation", component: location.owner, target: name, prop: nil, params: info.params
         )
-        SwiftUIBridge.report(site: callSite, args: [Scalars.json(to, labels: labels), .object(config)], durationMs: info.durationMs, symbols: stamp?.symbols)
+        SwiftUIBridge.report(site: callSite, args: [Scalars.json(to, labels: labels), .object(config)], durationMs: info.durationMs, stack: stamp?.stack)
         let running = atEditorSpeed(effective)
         if running != animation { t.animation = running }
     }

@@ -14,6 +14,7 @@
 import type { InspectorTask } from '../../protocol/inspector'
 import { captureStack } from './stack'
 import { __kfNow } from './runtime'
+import { enterInspector, leaveInspector } from './ownTime'
 
 /** A task as it ended: `end` on the wall clock (Date.now), the same on every thread. */
 export type TaskReport = Omit<InspectorTask, 't'> & { end: number }
@@ -30,7 +31,12 @@ let minMs = 4
 let restore: (() => void) | null = null
 
 const emit = (t: TaskReport) => {
-  for (const l of listeners) l(t)
+  enterInspector()
+  try {
+    for (const l of listeners) l(t)
+  } finally {
+    leaveInspector()
+  }
 }
 
 function install(g: TasksGlobal) {

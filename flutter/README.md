@@ -17,7 +17,7 @@ Flutter 3.29 or later. iOS, Android, macOS, Windows, Linux and the web.
 ```yaml
 # pubspec.yaml
 dependencies:
-  keyframer_inspector: ^0.2.0
+  keyframer_inspector: ^0.3.0
 ```
 
 ```dart
@@ -42,9 +42,22 @@ That is all the app needs. Optional:
   `valueNotifier.kfTrack('name')` for a `ValueNotifier<double>` (a drag offset).
 - `registerReplay(() => ...)`: what the panel's replay runs (re-fire an entrance).
 - `registerScenario('drag card', () async {...})`: an interaction an editor or agent can run.
+- `KeyframerScreen(name: 'Settings', child: ...)`: names the screen it is in while it is shown, for
+  what the navigator cannot name (a page pushed without a name, a tab, a pager's page, a custom
+  router's screen). `KeyframerInspector.setScreen('Feed')` does the same from code: use it for a pager
+  that keeps its pages alive (every page stays mounted), from `onPageChanged`.
+- A nested navigator (a tab's own stack) needs a `KfNavigatorObserver()` of its own: one observer
+  watches one navigator.
 
-`KeyframerInspector` connects in debug and profile builds and is a plain `RepaintBoundary` in release,
-unless built with `--dart-define=KEYFRAMER_INSPECTOR=true` or given `enabled: true`.
+`KeyframerInspector` connects in debug and profile builds and is a plain `RepaintBoundary` in release.
+`--dart-define=KEYFRAMER_INSPECTOR=true` turns it on in any build, and `=false` off in any build (no
+connection, and controllers capture no call sites). `enabled:` decides over both.
+
+Start it only when asked. While it runs it costs the app something (every animation start takes its
+call stack, printed between frames when its batch is sent, and a recording samples every frame), and a
+debug build is also what people install on their own phone. Put
+`--dart-define=KEYFRAMER_INSPECTOR=false` in your run configuration by default, or pass `enabled:` from
+a flag of your own.
 
 Nothing else to add for the rest: implicit animations (`AnimatedContainer`, `AnimatedOpacity`,
 `TweenAnimationBuilder` and the other ImplicitlyAnimatedWidgets you write) and `Hero` flights are found
@@ -148,12 +161,12 @@ clears the speed: a reloaded app runs at 1x.
 | --- | --- |
 | `signal` sites | Each `KfAnimationController` (or tracked controller or notifier): its value, located where it was constructed (`column` when the stack has one). A second mounted instance of the same call site is `<id>#2`, as in React Native; its name gets ` #2` only when another instance has the same name (two rows named after their index keep their own). |
 | `unsignal` | A tracked value disposed (its screen closed): it leaves the catalog. A recording keeps its id, so the screen opened again is followed. |
-| `anim` events | `forward`, `reverse`, `animateTo`, `animateBack`, `repeat`, `fling`, `animateWith`, each at its own call site, `target` = the value's name. Args mirror `withTiming(to, { duration, ... })`: `[to, { duration, from, curve }]`; `repeat` is `[{ min, max, reverse, period }]`. `durationMs` is how long it runs: the duration scaled by the range left to cover (as AnimationController does), an explicit duration as given, a simulation until it rests; none for `repeat` and `fling`. While recording they carry `t`, `frames` (the stack mapped to source, Flutter's frames marked `collapse`) and `stack` (app frames, printed the way the panel parses stacks). |
+| `anim` events | `forward`, `reverse`, `animateTo`, `animateBack`, `repeat`, `fling`, `animateWith`, each at its own call site, `target` = the value's name. Args mirror `withTiming(to, { duration, ... })`: `[to, { duration, from, curve }]`; `repeat` is `[{ min, max, reverse, period }]`. `durationMs` is how long it runs: the duration scaled by the range left to cover (as AnimationController does), an explicit duration as given, a simulation until it rests; none for `repeat` and `fling`. While recording they carry `t`, `frames` (the stack mapped to source, Flutter's frames marked `collapse`) and `stack` (app frames, printed the way the panel parses stacks). Built when their batch is sent (every 100 ms, between frames): the call site and stack are worked out then, `eid`, `at` and `t` are the start's, and the order is kept. A batch builds at most 4 ms of them; the rest go with the next ones. |
 | `params` / `overrides` | `1.duration` (or `0.period` for repeat) is tunable: an override applies the next time that call runs. |
 | `samples` | Every recorded value's `.value`, once per frame, after the frame's animations ticked. |
-| `frames`, `drops` | `js`: the UI isolate (build, layout, app code), measured like React Native's JS thread by a frame callback that reschedules itself. `ui`: the raster thread, from `SchedulerBinding.addTimingsCallback`; a frame is long when rasterising it took more than a refresh interval. Both use a port of `frameMeter.ts`. Engine timestamps map onto the recording's clock by the smallest offset seen, as client.ts maps the UI thread. |
+| `frames`, `drops` | `js`: the UI isolate (build, layout, app code), measured like React Native's JS thread by a frame callback that reschedules itself. `ui`: the raster thread, from `SchedulerBinding.addTimingsCallback`; a frame is long when rasterising it took more than a refresh interval. Both use a port of `frameMeter.ts`. Engine timestamps map onto the recording's clock by the smallest offset seen, as client.ts maps the UI thread. A `js` drop carries `inspectorMs`, the inspector's own time on the UI isolate since the frame before (from 0.5 ms): every entry point times itself (animation starts and status listeners, the per-frame sampling, the scene's looks, the navigator observer, the editor's messages, the batches going out), the outermost once when they nest, without the app's code they call into (the controller's own start, a replay, values written by playback). The sampling after a frame counts toward the next frame, which it holds up. `ui` drops carry none: the inspector does no work on the raster thread. |
 | `touch` markers | `GestureBinding.instance.pointerRouter` global route: down, move (at most one per 8 ms per pointer), up, cancel, in logical points, timed by the event's own stamp. |
-| `navigation` markers | `KfNavigatorObserver`: page routes by `RouteSettings.name`, with JSON route arguments as `params`. Dialogs are not screens. |
+| `navigation` markers | `KfNavigatorObserver`: page routes by `RouteSettings.name` (else the route's type without type arguments, `MaterialPageRoute`), with JSON route arguments as `params`. Each page is a screen of its own: two pages under one name in a row, or one route pushed again with other arguments, are two markers. Dialogs are not screens. `KeyframerScreen`: the latest one mounted that is still shown names the screen (not one in a page another page covers, or in an IndexedStack child that is not selected); when it goes, the one under it does again, else the observer's page; a new `name` renames it in place. `KeyframerInspector.setScreen` names it until the next change either of them makes. What changes within a frame is one marker, at its end: a page pushed with its own `KeyframerScreen` is reported under that name only. Playback goes back to a page in the stack by the name it was reported under, and never pushes a name that is not a route's. |
 | `playback` | Samples written into the values in time order, navigating along `routes`. A value is the inspector's while it plays: its controller stops, and what the app starts on it meanwhile waits. When playback ends, that deferred start runs, or an animation that was running before (a loop) starts again. |
 | `scrub` | A playback whose samples all share one moment holds its values (a loop stays where the playhead shows) until the next playback, capture or recording. |
 | `capture` | Navigate to the moment's screen, set the values, wait two frames, `RenderRepaintBoundary.toImage`. Always PNG (the answer's `format` says so, which the protocol allows): Flutter has no JPEG encoder without a plugin. 600 ms after the last capture of an export the values go back to what they were. |
@@ -163,17 +176,21 @@ clears the speed: a reloaded app runs at 1x.
 | `accessibility`, `appState` markers | `didChangeAccessibilityFeatures` and `didChangeAppLifecycleState` while recording: `reduceMotion`, and `active`, `inactive` or `background`. |
 | Implicit animations | While recording, a walk of the element tree about once a second finds the `ImplicitlyAnimatedWidgetState`s the app wrote (Flutter's own, inside every Material, are left out) and makes each a value: its progress through the current change, eased by its curve (`writable: false`), with the property it animates as the site's `prop` (`opacity` for AnimatedOpacity, `scale`, `rotate`, `translate`, `position`, `alignment`, `padding`, `size`, `elevation`, `textStyle`, `theme`; none for TweenAnimationBuilder, whose builder decides, or for AnimatedContainer, whose each `anim` says what that change animates, comma-joined: `size,color`). Each change is an `anim` named after the widget (`fn: 'AnimatedContainer'`, `[to, { duration, curve }]`, `durationMs`), located where the widget was written, with the component whose build wrote it. Locations come from widget creation tracking, so debug builds that have it only (`widget-sites`). They leave the catalog when their widget goes or the recording stops. |
 | `Hero` flights | `KfNavigatorObserver` matches the Hero tags of the two screens a push or pop moves between (as HeroController does, minus `HeroMode(enabled: false)`) and reports an `anim` per flight (`fn: 'Hero'`, `target: 'Hero(<tag>)'`, `[1 or 0, { duration, tag, from, to }]`) at the landing Hero (or the app's widget around it, for a FloatingActionButton's), with a value that follows the flight until it lands. A back swipe's flights follow the finger and are not reported. |
-| `visibility` markers | Every 200 ms while recording, for each value that moved: are any of its widgets visible. Its widgets are the animated widgets listening to it (AnimatedBuilder and every AnimatedWidget, FadeTransition, ValueListenableBuilder, through CurvedAnimation, Tween.animate and the other wrappers), else the State whose ticker drives it, but only for a value no animated widget was ever seen listening to: one whose widgets all went is `offscreen` when the last of them sat in a scrollable (a lazy list unmounted the row it scrolled away), else `detached`, never its still-visible State. `detached` (gone while it moves), `hidden` (an opacity of 0, Offstage, Visibility, a muted TickerMode, no area), `offscreen` (outside the screen or its viewport), `covered` (an opaque screen above it finished arriving). Hidden is confirmed on two looks in a row, so a value Flutter mutes as its screen is covered is not reported, and a screen sliding in or out is not judged. Visible again: a marker at once. |
+| `visibility` markers | Every 200 ms while recording, for each value that moved: are any of its widgets visible. Markers are sent for the values being recorded only (the others have no samples to explain), and a value created again at the same id (its screen opened again) starts afresh. Its widgets are the animated widgets listening to it (AnimatedBuilder and every AnimatedWidget, FadeTransition, ValueListenableBuilder, through CurvedAnimation, Tween.animate and the other wrappers), else the State whose ticker drives it, but only for a value no animated widget was ever seen listening to: one whose widgets all went is `offscreen` when the last of them sat in a scrollable (a lazy list unmounted the row it scrolled away), else `detached`, never its still-visible State. `detached` (gone while it moves), `hidden` (an opacity of 0, Offstage, Visibility, a muted TickerMode, no area), `offscreen` (outside the screen or its viewport), `covered` (an opaque screen above it finished arriving). Hidden is confirmed on two looks in a row, so a value Flutter mutes as its screen is covered is not reported, and a screen sliding in or out is not judged. Visible again: a marker at once. |
 | `renderHint` events | From the same looks, once per value and hint (they join the catalog): `opacity-widget` (an `Opacity` rebuilt with another opacity between 0 and 1), `blur` (a `BackdropFilter` drawn over where a value moves, or an `ImageFiltered` around it), `mask` (`ClipPath`, `ShaderMask` around a moving value), `save-layer` (a clip with `Clip.antiAliasWithSaveLayer` around one). `detail` names the widget and, in debug builds, where it was written. |
 
 ## Call sites: the choice
 
 | Approach | Works today | Automatic | Notes |
 | --- | --- | --- | --- |
-| `KfAnimationController` (a subclass) capturing `StackTrace.current` | Yes | One rename per controller | Chosen. Exact for creation and for every start (each start parses the stack of that call). Sees the command, its duration and curve. |
+| `KfAnimationController` (a subclass) capturing `StackTrace.current` | Yes | One rename per controller | Chosen. Exact for creation and for every start. Sees the command, its duration and curve. A creation stack is read only once an inspector is installed; a start's stack, as far as its first app frame (the frames past it only while recording), and only when its batch is sent, unless one of the panel's edits could apply to that call (its site is needed then). Taking a stack costs a few µs; printing one, 30 to 200 µs in a profile build (more in debug), by depth. |
 | `controller.kfTrack('name')` (an extension) | Yes | One call per controller | For controllers you do not construct. A plain controller cannot be intercepted, so starts are seen only as status changes: no call site, curve or exact command. |
 | `--track-widget-creation` locations | Debug only | Fully | Locates widgets, not controllers (a controller is not a widget). Used for what has no call of its own: implicit animations, Hero flights, render hints. |
 | A kernel transformer | Needs a custom build step | Fully | The route to React Native parity (rewrite `AnimationController(` and `.forward(` calls with baked-in sites, including implicit animations). Flutter has no supported plugin point for kernel transformers today, so it means a forked frontend or a build wrapper. Later. |
+
+A helper that creates or starts controllers gives every value it creates and every start it makes the
+helper's own call site (the first frame of the app's code is the helper's line): give each value a
+`name`.
 
 Stack traces give `file:line:column` in debug builds and `file:line` in profile and release (AOT). Built
 with `--split-debug-info` or `--obfuscate`, AOT prints addresses: sites then fall back to the value's
@@ -184,30 +201,46 @@ release build's point into `main.dart.js`, so sites fall back to names there too
 ## Tests
 
 ```sh
-flutter test                                   # 102 tests
+flutter test                                   # 141 tests (one runs only with the define below)
 flutter test --platform chrome test/web_test.dart   # what must hold in a browser too
+flutter test --dart-define=KEYFRAMER_INSPECTOR=false test/inspector_test.dart   # the off switch
 ```
 
 - `call_site_test.dart`: VM, AOT, web and V8 stack formats, the split-debug-info case, app frames,
-  project-relative files, component names, compiled web frames never taken as call sites.
+  project-relative files, component names, compiled web frames never taken as call sites, stacks read
+  no further than asked and printed only when first read, VM frames read by hand against the
+  expressions they replaced (real and generated lines), and the one-pass stack formatting against the
+  two passes it replaced.
 - `protocol_test.dart`: a scripted session through the real client, compared with `test/goldens/*.json`
-  (hello with display, accessibility and `time`; the `time` answer; the visibility, display,
-  accessibility, appState and time markers; a render hint). The goldens are also written to
-  `test/goldens/messages.ts` with `satisfies InspectorAppMessage`, and the test runs `tsc` on it (with the
-  monorepo's TypeScript, skipped when it is not installed): a missing or extra field or a wrong literal
-  fails. `KF_UPDATE_GOLDENS=1 flutter test test/protocol_test.dart` rewrites them.
+  (hello with display, accessibility and `time`; the `time` answer; a drop with `inspectorMs`; the
+  visibility, display, accessibility, appState and time markers; a render hint). The goldens are also
+  written to `test/goldens/messages.ts` with `satisfies InspectorAppMessage`, and the test runs `tsc` on
+  it (with the monorepo's TypeScript, skipped when it is not installed): a missing or extra field or a
+  wrong literal fails. `KF_UPDATE_GOLDENS=1 flutter test test/protocol_test.dart` rewrites them.
 - `client_test.dart`: hello and catalog, batching, presence, recording (samples, both threads' frames,
   touches, navigation), playback, capture, scenarios, overrides, reconnect, the frame meter (with and
   without a display), `time` (answers, markers, steps only while paused, back to 1 when editors leave),
-  display, accessibility and lifecycle markers, the scene's markers and hints, and a host written before
-  the optional interfaces.
+  display, accessibility and lifecycle markers, the scene's markers (for recorded values only) and
+  hints, a start's stack formatted only while recording and only when its batch is sent (its order,
+  eid and times kept), a backlog sent over several batches, nothing built while disconnected, a start
+  that cannot be read left out, the inspector's own time (outermost sections once, the app's code left
+  out) and `inspectorMs` on the UI isolate's drops only, and a host written before the optional
+  interfaces.
 - `controller_test.dart`: sites from a real widget, every start kind, overrides, playback handing a loop
-  back, instances, `kfTrack`, the navigator observer.
+  back, instances, `kfTrack`, the navigator observer, creation stacks read only once an inspector is
+  installed, a start's stack printed when its site is read and as far as its call site, at once only
+  when one of the panel's edits could apply.
+- `navigation_test.dart`: page names, every page a screen of its own, `KeyframerScreen` (pushed,
+  covered, popped, renamed, swapped, nested, IndexedStack tabs, without an observer), `setScreen`,
+  playback back to a declared screen.
+- `inspector_test.dart`: the `KEYFRAMER_INSPECTOR` define and `enabled: false` (no connection, no sites
+  captured).
 - `time_test.dart`: the clock on real controllers: slow motion, a pause held through engine-style frames
   and stepped by display frames, back to normal with no jump, the fallback without a frame handler.
 - `scene_test.dart`: real widgets: implicit animations with their sites and components (Flutter's own
   left out), visibility for every reason (and none for a value muted as its screen is covered, or while
-  a screen slides in), every render hint and what is not one, Hero flights there and back.
+  a screen slides in, and afresh for a value created again at the same id), every render hint and what
+  is not one, Hero flights there and back.
 - `web_test.dart`: the scan, the clock and call sites, in a browser as well as on the VM.
 - `device_test.dart`: what each platform may send (simulators by UDID and name, with and without
   Xcode's environment; emulators by AVD; physical devices by model only), getprop's listing, and the

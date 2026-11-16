@@ -4,11 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
+import 'package:keyframer_inspector/src/call_site.dart' show KfLazyStack;
 
 /// Collects what the instrumented code reports.
 class Collect implements KfSink {
   final anims = <(KfCallSite, List<Object?>)>[];
   final durations = <num?>[];
+  final stacks = <List<KfStackFrame>?>[];
   final signals = <KfSignalSite>[];
   final gone = <String>[];
 
@@ -16,6 +18,7 @@ class Collect implements KfSink {
   void anim(KfCallSite site, List<Object?> args, {List<KfStackFrame>? frames, num? durationMs}) {
     anims.add((site, args));
     durations.add(durationMs);
+    stacks.add(frames);
   }
 
   @override
@@ -134,6 +137,68 @@ void main() {
     expect(sink.gone, [entranceSite, loopSite]);
   });
 
+  testWidgets(
+    'a start prints its stack when its site is read, as far as its call site, and the same call keeps its site',
+    (tester) async {
+      late DemoState s;
+      await tester.pumpWidget(Demo(onReady: (d) => s = d));
+      final stack = sink.stacks.single! as KfLazyStack;
+      // Taken while the app started it, printed only once something reads its site (the client: when it
+      // sends the batch, between frames).
+      expect(stack.printed, isFalse);
+      expect(sink.anims.single.$1.id, forwardSite);
+      expect(stack.printed, isTrue);
+      final read = stack.framesRead;
+      // The inspector's own frames, then the call: nothing past it until a recording asks.
+      expect(stack[read - 1].uri, endsWith('test/controller_test.dart'));
+      expect(read, lessThan(stack.length));
+      sink.anims.clear();
+      void again() => s.loop.forward(from: 0);
+      again();
+      again();
+      expect(sink.anims[0].$1.id, sink.anims[1].$1.id);
+      expect(sink.anims[0].$1.line, lineOf(siteOf('void again() => s.loop.forward(from: 0);', at: 'forward')));
+      s.loop.stop();
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('a value made while no inspector is installed reads its creation stack once one is', (tester) async {
+    rt.reset();
+    rt.root = Directory.current.path;
+    final early = KfSignal(read: () => 0, write: (_) {}, name: 'early', created: StackTrace.current);
+    expect(rt.register(early), isNull);
+    final c = KfAnimationController(vsync: const TestVSync(), name: 'before');
+    // Neither has an id, nor has read its stack.
+    expect(rt.signals, isEmpty);
+    expect(early.located, isFalse);
+    sink = Collect();
+    rt.install(sink);
+    expect(early.located, isTrue);
+    expect(early.frame!.line, lineOf(siteOf('created: StackTrace.current')));
+    expect(sink.signals.map((s) => s.name), ['early', 'before']);
+    expect(rt.signals[siteOf("KfAnimationController(vsync: const TestVSync(), name: 'before')")]?.name, 'before');
+    // Gone before an inspector came: never placed.
+    final gone = KfAnimationController(vsync: const TestVSync(), name: 'gone');
+    rt.uninstall(sink);
+    final brief = KfAnimationController(vsync: const TestVSync(), name: 'brief');
+    brief.dispose();
+    rt.install(sink);
+    expect(rt.signals.values.map((s) => s.name), isNot(contains('brief')));
+    // Without site capture (the inspector turned off) a value takes no stack: named by its name.
+    kfCaptureSites = false;
+    try {
+      final off = KfAnimationController(vsync: const TestVSync(), name: 'off');
+      expect(rt.signals.keys, contains('value:off'));
+      off.dispose();
+    } finally {
+      kfCaptureSites = true;
+    }
+    rt.unregister(early);
+    c.dispose();
+    gone.dispose();
+  });
+
   testWidgets('every kind of start is reported with what it was asked', (tester) async {
     late DemoState s;
     await tester.pumpWidget(Demo(onReady: (d) => s = d));
@@ -196,6 +261,36 @@ void main() {
     await tester.pump(const Duration(milliseconds: 101));
     expect(s.entrance.value, 1.0);
     expect(s.entrance.duration, const Duration(milliseconds: 300));
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('a start works its site out at once only when one of the panel\'s edits could apply to it', (
+    tester,
+  ) async {
+    late DemoState s;
+    await tester.pumpWidget(Demo(onReady: (d) => s = d));
+    void again() => s.loop.forward(from: 0);
+    KfLazyStack stack() => sink.stacks.last! as KfLazyStack;
+    again();
+    expect(stack().printed, isFalse);
+    final later = sink.anims.last.$1.toJson();
+    // An edit of a param forward does not read (a spring's): its site can still wait.
+    rt.overrides = {
+      'lib/elsewhere.dart:1:1': {'0.spring.stiffness': 200},
+    };
+    again();
+    expect(stack().printed, isFalse);
+    // An edit of a duration, another call's: this one's site is needed now, to tell.
+    rt.overrides = {
+      'lib/elsewhere.dart:1:1': {'1.duration': 100},
+    };
+    again();
+    expect(stack().printed, isTrue);
+    // The same site either way, field for field, and not edited.
+    expect(sink.anims.last.$1.toJson(), later);
+    expect((sink.anims.last.$2[1] as Map)['duration'], 1000);
+    rt.overrides = {};
+    s.loop.stop();
     await tester.pumpWidget(const SizedBox());
   });
 

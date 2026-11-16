@@ -43,6 +43,7 @@ import { describeDevice, type ExpoDeviceModule } from './device'
 import { createFrameMeter, tickFrameMeter, type FrameMeter } from './frameMeter'
 import type { UiFrameMeter } from './recorder'
 import { watchLogs } from './logs'
+import { enterInspector, inspectorTotalMs, inspectorWork, leaveInspector, timeInspector } from './ownTime'
 import { applyOverrides, currentRoute, registeredSignals, signalRoutes, tapNavigation, tapTimeScale, tapTouches, timeScale } from './runtime'
 
 export { registerReplay } from './client'
@@ -349,11 +350,12 @@ function plainArgs(args: unknown[]): unknown[] {
 
 // ─── UI thread frames ────────────────────────────────────────────────────────────
 // One frame loop on the UI runtime, however many listen (a live recording and one on the device can
-// run at once): it reports to JS, which hands the stats to every listener.
+// run at once): it reports to JS, which hands the stats to every listener. Its long frames say how long
+// the inspector's own worklets ran in them (ownTime.ts): this loop, the samplers and the work loop.
 const uiListeners = new Set<Parameters<UiFrameMeter>[0]>()
-const fanOut = (stats: InspectorFrameStat[], drops: InspectorFrameDrop[], at: number) => {
+const fanOut = inspectorWork((stats: InspectorFrameStat[], drops: InspectorFrameDrop[], at: number) => {
   for (const l of uiListeners) l(stats, drops, at)
-}
+})
 
 function runUiLoop(on: boolean) {
   scheduleOnUI(
@@ -361,11 +363,13 @@ function runUiLoop(on: boolean) {
       'worklet'
       const g = globalThis as UiGlobal
       if (!start) {
+        if (g.__KF_UI_FRAMES__) timeInspector(false)
         g.__KF_UI_FRAMES__ = null
         return
       }
       if (g.__KF_UI_FRAMES__ || !g.requestAnimationFrame) return
       const m = createFrameMeter('ui')
+      timeInspector(true)
       // Frames are counted against the display's refresh rate: the one last measured until the frames
       // themselves say (display.ts), not the meter's own guess from how many frames were short.
       const d = createDisplayMeter()
@@ -377,14 +381,20 @@ function runUiLoop(on: boolean) {
       function frame(ts: number) {
         // A newer loop (or none) took over: this one ends.
         if ((globalThis as UiGlobal).__KF_UI_FRAMES__ !== m) return
-        // Real time, also while the inspector slows animations down.
-        const t = realFrameTime(ts)
-        if (tickDisplayMeter(d, t)) scheduleOnRN(noteDisplay, d.hz, d.changes)
-        const hz = d.hz || knownHz
-        if (hz) m.interval = 1000 / hz
-        tickFrameMeter(m, t)
-        if (m.stats.length) scheduleOnRN(fanOut, m.stats.splice(0), m.drops.splice(0), t)
-        raf!(frame)
+        // The meter's own work counts toward the next frame, like what the other loops do after it.
+        enterInspector()
+        try {
+          // Real time, also while the inspector slows animations down.
+          const t = realFrameTime(ts)
+          if (tickDisplayMeter(d, t)) scheduleOnRN(noteDisplay, d.hz, d.changes)
+          const hz = d.hz || knownHz
+          if (hz) m.interval = 1000 / hz
+          tickFrameMeter(m, t, inspectorTotalMs())
+          if (m.stats.length) scheduleOnRN(fanOut, m.stats.splice(0), m.drops.splice(0), t)
+          raf!(frame)
+        } finally {
+          leaveInspector()
+        }
       }
       raf(frame)
     },
@@ -418,9 +428,9 @@ let nextSampler = 1
 export function sampleUiValues(values: unknown[], onRows: (rows: number[][]) => void): () => void {
   const token = nextSampler++
   let live = true
-  const deliver = (rows: number[][]) => {
+  const deliver = inspectorWork((rows: number[][]) => {
     if (live) onRows(rows)
-  }
+  })
   scheduleOnUI(
     (tok: number, list: Array<{ value: unknown }>) => {
       'worklet'
@@ -436,19 +446,24 @@ export function sampleUiValues(values: unknown[], onRows: (rows: number[][]) => 
           if (rows.length) scheduleOnRN(deliver, rows)
           return
         }
-        // Real time: a recording's clock keeps running while the inspector slows animations down.
-        const row: number[] = [realFrameTime(ts)]
-        for (let i = 0; i < list.length; i++) {
-          const v = list[i]!.value
-          row.push(typeof v === 'number' ? v : NaN)
+        enterInspector()
+        try {
+          // Real time: a recording's clock keeps running while the inspector slows animations down.
+          const row: number[] = [realFrameTime(ts)]
+          for (let i = 0; i < list.length; i++) {
+            const v = list[i]!.value
+            row.push(typeof v === 'number' ? v : NaN)
+          }
+          rows.push(row)
+          // Every few frames: one hop to JS per batch, not per frame.
+          if (rows.length >= 6) {
+            scheduleOnRN(deliver, rows)
+            rows = []
+          }
+          raf(frame)
+        } finally {
+          leaveInspector()
         }
-        rows.push(row)
-        // Every few frames: one hop to JS per batch, not per frame.
-        if (rows.length >= 6) {
-          scheduleOnRN(deliver, rows)
-          rows = []
-        }
-        raf(frame)
       }
       raf(frame)
     },
@@ -520,9 +535,9 @@ function outcomeOf(on: string, e: GestureEvent | undefined, success: unknown): [
 }
 
 const gestureListeners = new Set<(r: GestureReport) => void>()
-const gestureFanOut = (site: InspectorGestureSite, handler: number, x: number | null, y: number | null, at: number, success: boolean | null, activated: boolean | null) => {
+const gestureFanOut = inspectorWork((site: InspectorGestureSite, handler: number, x: number | null, y: number | null, at: number, success: boolean | null, activated: boolean | null) => {
   for (const l of gestureListeners) l({ site, handler, x, y, at, success, activated })
-}
+})
 
 function installGestureHook(on: boolean) {
   const g = globalThis as { __KF_GESTURE__?: unknown }
@@ -542,9 +557,14 @@ function installGestureHook(on: boolean) {
     }
     ui.__KF_GESTURE__ = (site: InspectorGestureSite, e: GestureEvent | undefined, success: unknown) => {
       'worklet'
-      const [x, y] = fingerOf(e)
-      const [ok, activated] = outcomeOf(site.on, e, success)
-      scheduleOnRN(gestureFanOut, site, e?.handlerTag ?? -1, x, y, Date.now(), ok, activated)
+      enterInspector()
+      try {
+        const [x, y] = fingerOf(e)
+        const [ok, activated] = outcomeOf(site.on, e, success)
+        scheduleOnRN(gestureFanOut, site, e?.handlerTag ?? -1, x, y, Date.now(), ok, activated)
+      } finally {
+        leaveInspector()
+      }
     }
   }, on)
 }
@@ -571,10 +591,10 @@ export type UiScrollRow = [number, string, number, number]
 
 const workListeners = new Set<(rows: UiWorkRow[]) => void>()
 const scrollListeners = new Set<(rows: UiScrollRow[]) => void>()
-const workFanOut = (rows: UiWorkRow[], scrolls: UiScrollRow[]) => {
+const workFanOut = inspectorWork((rows: UiWorkRow[], scrolls: UiScrollRow[]) => {
   if (rows.length) for (const l of workListeners) l(rows)
   if (scrolls.length) for (const l of scrollListeners) l(scrolls)
-}
+})
 type WorkGlobal = {
   __KF_UI_WORK__?: unknown[]
   __KF_UI_SCROLL__?: unknown[]
@@ -610,34 +630,39 @@ function runWorkLoop(on: boolean) {
         if (rows.length || scrolls.length) scheduleOnRN(workFanOut, rows, scrolls)
         return
       }
-      // Scroll offsets: the last one each list reported this frame.
-      const sb = ui.__KF_UI_SCROLL__
-      if (sb && sb.length) {
-        const lastAt: Record<string, UiScrollRow> = {}
-        for (let i = 0; i + 2 < sb.length; i += 3) lastAt[sb[i] as string] = [t, sb[i] as string, sb[i + 1] as number, sb[i + 2] as number]
-        sb.length = 0
-        for (const k in lastAt) scrolls.push(lastAt[k]!)
-      }
-      const buf = ui.__KF_UI_WORK__
-      if (buf && buf.length) {
-        const sums: Record<string, UiWorkRow> = {}
-        for (let i = 0; i + 3 < buf.length; i += 4) {
-          const key = `${buf[i]}|${buf[i + 1]}|${buf[i + 2]}`
-          const row = sums[key]
-          if (row) {
-            row[4] += buf[i + 3] as number
-            row[5] += 1
-          } else sums[key] = [t, buf[i] as string, buf[i + 1] as string, buf[i + 2] as string | null, buf[i + 3] as number, 1]
+      enterInspector()
+      try {
+        // Scroll offsets: the last one each list reported this frame.
+        const sb = ui.__KF_UI_SCROLL__
+        if (sb && sb.length) {
+          const lastAt: Record<string, UiScrollRow> = {}
+          for (let i = 0; i + 2 < sb.length; i += 3) lastAt[sb[i] as string] = [t, sb[i] as string, sb[i + 1] as number, sb[i + 2] as number]
+          sb.length = 0
+          for (const k in lastAt) scrolls.push(lastAt[k]!)
         }
-        buf.length = 0
-        for (const k in sums) rows.push(sums[k]!)
+        const buf = ui.__KF_UI_WORK__
+        if (buf && buf.length) {
+          const sums: Record<string, UiWorkRow> = {}
+          for (let i = 0; i + 3 < buf.length; i += 4) {
+            const key = `${buf[i]}|${buf[i + 1]}|${buf[i + 2]}`
+            const row = sums[key]
+            if (row) {
+              row[4] += buf[i + 3] as number
+              row[5] += 1
+            } else sums[key] = [t, buf[i] as string, buf[i + 1] as string, buf[i + 2] as string | null, buf[i + 3] as number, 1]
+          }
+          buf.length = 0
+          for (const k in sums) rows.push(sums[k]!)
+        }
+        if (++frames % 6 === 0 && (rows.length || scrolls.length)) {
+          scheduleOnRN(workFanOut, rows, scrolls)
+          rows = []
+          scrolls = []
+        }
+        raf(frame)
+      } finally {
+        leaveInspector()
       }
-      if (++frames % 6 === 0 && (rows.length || scrolls.length)) {
-        scheduleOnRN(workFanOut, rows, scrolls)
-        rows = []
-        scrolls = []
-      }
-      raf(frame)
     }
     raf(frame)
   }, loop)
@@ -720,12 +745,15 @@ export function markersWhileRecording(elapsed: () => number, onMarker: (m: Inspe
     }
     onMarker({ kind: 'touch', t, phase: touch.phase, id: touch.id, x: touch.x, y: touch.y })
   })
-  const watchTargets = setInterval(() => {
-    for (const [id, o] of open) {
-      // React Native's DOM-like nodes say when they left the tree.
-      if ((o.target as { isConnected?: boolean } | undefined)?.isConnected === false) lose(id, elapsed())
-    }
-  }, 50)
+  const watchTargets = setInterval(
+    inspectorWork(() => {
+      for (const [id, o] of open) {
+        // React Native's DOM-like nodes say when they left the tree.
+        if ((o.target as { isConnected?: boolean } | undefined)?.isConnected === false) lose(id, elapsed())
+      }
+    }),
+    50,
+  )
   const offGestures =
     platformName() === 'web'
       ? () => {}
@@ -812,7 +840,7 @@ export function markersWhileRecording(elapsed: () => number, onMarker: (m: Inspe
 
 /** The bridge connectInspector installs: a hook on the UI runtime that reports back to JS. */
 export function uiThreadBridge(ctx: InspectorBridgeContext): InspectorBridge {
-  const reportFromUI = (site: InspectorCallSite, args: unknown[]) => ctx.report(site, args)
+  const reportFromUI = inspectorWork((site: InspectorCallSite, args: unknown[]) => ctx.report(site, args))
   let stopFrames: (() => void) | null = null
 
   scheduleOnUI((initial: InspectorOverrides) => {
@@ -822,9 +850,16 @@ export function uiThreadBridge(ctx: InspectorBridgeContext): InspectorBridge {
     g.__KF_INSPECTOR__ = {
       anim(fn: (...a: unknown[]) => unknown, site: InspectorCallSite, args: unknown[]) {
         'worklet'
-        const table = (globalThis as UiGlobal).__KF_UI_OVERRIDES__ ?? {}
-        const next = applyOverrides(args, table[site.id])
-        scheduleOnRN(reportFromUI, site, plainArgs(next))
+        // The inspector's part, not the animation the app asked for.
+        let next: unknown[]
+        enterInspector()
+        try {
+          const table = (globalThis as UiGlobal).__KF_UI_OVERRIDES__ ?? {}
+          next = applyOverrides(args, table[site.id])
+          scheduleOnRN(reportFromUI, site, plainArgs(next))
+        } finally {
+          leaveInspector()
+        }
         return fn(...next)
       },
       // Shared values and styles are registered on the JS thread, where components render.

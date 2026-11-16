@@ -160,6 +160,44 @@ final class FrameMeterDisplayTests: XCTestCase {
         XCTAssertEqual(unbounded.interval, 1000.0 / 120, accuracy: 1e-9)
     }
 
+    /// A long frame carries the inspector's own time over it, rounded to 0.1 ms, from 0.5 ms; a frame
+    /// on time carries nothing however long the inspector worked.
+    func testALongFrameCarriesTheInspectorsTime() {
+        var m = FrameMeter(thread: .js, hz: 120)
+        m.start(at: 0)
+        m.tick(8.3, inspectorMs: 3)
+        m.tick(33.3, inspectorMs: 21.04)
+        m.tick(58.3, inspectorMs: 0.4)
+        XCTAssertEqual(m.drops.map(\.inspectorMs), [21, nil])
+        XCTAssertEqual(m.drops.first?.dropped, 2)
+    }
+
+    /// Only the outermost section counts, the app's code inside one is left out, and work off the main
+    /// thread is not the main thread's.
+    func testOwnTimeCountsTheOutermostSectionWithoutTheApp() {
+        _ = OwnTime.take()
+        let spin = { (ms: Double) in
+            let end = CACurrentMediaTime() + ms / 1000
+            while CACurrentMediaTime() < end {}
+        }
+        OwnTime.measure {
+            spin(2)
+            OwnTime.measure { spin(2) }
+            OwnTime.notOurs { spin(10) }
+        }
+        let own = OwnTime.take()
+        XCTAssertGreaterThanOrEqual(own, 4)
+        XCTAssertLessThan(own, 9)
+        XCTAssertEqual(OwnTime.take(), 0)
+        let done = expectation(description: "background")
+        DispatchQueue.global().async {
+            OwnTime.measure { spin(3) }
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 2)
+        XCTAssertEqual(OwnTime.take(), 0)
+    }
+
     /// N1: the main thread blocked right after `record`, before the display link ticked: one long frame.
     func testAStallAtTheStartIsMeasured() {
         var m = FrameMeter(thread: .js, hz: 60)

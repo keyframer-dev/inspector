@@ -362,15 +362,15 @@ export function trackNavigation(ref: NavRef): () => void {
   }
 }
 function markRoute(ref: NavRef) {
-  let r: { name: string; params?: object } | undefined
+  let r: { name: string; key?: string; params?: object } | undefined
   try {
     r = ref.getCurrentRoute?.()
   } catch {
     // The container is not ready yet: its first state change marks the route.
     return
   }
-  // The container fires `state` more than once per screen change: markNavigation keeps one.
-  if (r?.name) markNavigation(r.name, r.params as Record<string, unknown> | undefined)
+  // The container fires `state` more than once per screen change: the route's key keeps one.
+  if (r?.name) emitNavigation({ route: r.name, ...(r.params ? { params: plain(r.params as Record<string, unknown>) } : {}) }, r.key)
 }
 
 /** Plain, JSON-safe params (navigation params can hold functions and objects). */

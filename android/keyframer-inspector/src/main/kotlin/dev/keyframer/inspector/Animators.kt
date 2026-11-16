@@ -16,6 +16,7 @@ import dev.keyframer.inspector.core.Param
 import dev.keyframer.inspector.core.Signal
 import dev.keyframer.inspector.core.SignalSite
 import java.lang.ref.WeakReference
+import java.util.IdentityHashMap
 
 /**
  * Animators the app handed to [Keyframer.track]. Android has no global hook into ValueAnimator (its
@@ -31,13 +32,83 @@ import java.lang.ref.WeakReference
  *
  * The view an animator moves (an ObjectAnimator's target, or the one passed to kfTrack) is watched for
  * visibility while recording and checked for render hints on each start.
+ *
+ * Its call site comes from the stack of the kfTrack call, read off the main thread when nothing needs
+ * it within the frame (see [track]). Main thread.
  */
 internal class AnimatorTracker(private val session: () -> InspectorSession?) {
     private val tracked = LinkedHashMap<String, Tracked>()
     private var overrides: Map<String, Map<String, Double>> = emptyMap()
+    /** Animators whose stack is being read, by the animator passed to kfTrack. */
+    private val reading = IdentityHashMap<Animator, Pending>()
 
     /** The window on top, for render hints about blurs above an animated view. */
     var topWindow: () -> Window? = { null }
+
+    /**
+     * Tracks `animator` from where `taken` was made. Its call site, and so its ids, is read now when
+     * something needs it within this frame: a recording (its values are sampled from the next frame),
+     * the panel's overrides (they apply before it starts), or the editor's speed (it is held from its
+     * first frame). Otherwise the stack is read off the main thread and the animator registered when
+     * it comes back, a millisecond or so later: an animator made on every tap costs the tap a
+     * `Throwable()`, not a stack. Starts in between are reported then, at the time they happened.
+     */
+    fun track(animator: Animator, name: String?, owner: Activity?, taken: Throwable, extraPrefixes: List<String>, view: View? = null) {
+        val s = session() ?: return
+        if (animator in reading || animator is ValueAnimator && tracked.values.any { it.animator === animator }) return
+        if (s.isRecording || overrides.isNotEmpty() || s.timeScale != 1.0) return track(animator, name, owner, taken.stackTrace, extraPrefixes, view)
+        val p = Pending(animator, name, owner?.let { WeakReference(it) }, taken, extraPrefixes, view?.let { WeakReference(it) })
+        reading[animator] = p
+        p.attach()
+        Stacks.read(taken, { it }) { stack -> if (reading[animator] === p) settle(p, stack) }
+    }
+
+    /**
+     * An animator tracked while its stack is read, and what [track] needs to register it: the starts it
+     * (or a set's children) made until then, stamped as they happened.
+     */
+    private inner class Pending(
+        val animator: Animator,
+        val name: String?,
+        val owner: WeakReference<Activity>?,
+        val taken: Throwable,
+        val extraPrefixes: List<String>,
+        val view: WeakReference<View>?,
+    ) : AnimatorListenerAdapter() {
+        val starts = LinkedHashMap<Animator, ArrayList<InspectorSession.AnimStart>>()
+        val parts: List<Animator> = if (animator is AnimatorSet) animator.childAnimations.filterIsInstance<ValueAnimator>() else listOf(animator)
+
+        fun attach() = parts.forEach { it.addListener(this) }
+
+        fun detach() = parts.forEach { it.removeListener(this) }
+
+        override fun onAnimationStart(animation: Animator): Unit = ownTime.time {
+            val stamp = session()?.animStart() ?: return@time
+            starts.getOrPut(animation) { ArrayList() }.add(stamp)
+        }
+    }
+
+    /** Registers a pending animator from its stack, and reports the starts it made meanwhile. */
+    private fun settle(p: Pending, stack: Array<StackTraceElement>) {
+        reading.remove(p.animator)
+        p.detach()
+        val owner = p.owner?.get()
+        // Its screen went away meanwhile: nothing left to track.
+        if (p.owner != null && (owner == null || owner.isDestroyed)) return
+        // A part tracked already (a set's child tracked on its own too) reported its starts itself.
+        val fresh = p.parts.filter { part -> tracked.values.none { it.animator === part } }
+        track(p.animator, p.name, owner, stack, p.extraPrefixes, p.view?.get())
+        for (part in fresh) {
+            val starts = p.starts[part] ?: continue
+            tracked.values.firstOrNull { it.animator === part }?.startedBefore(starts)
+        }
+    }
+
+    /** A pending animator (or a set's child) is registered now: something needs its ids (untrack). */
+    private fun settleNow(animator: Animator) {
+        val p = reading.values.firstOrNull { it.animator === animator || animator in it.parts } ?: return
+        settle(p, p.taken.stackTrace)
+    }
 
     fun track(animator: Animator, name: String?, owner: Activity?, stack: Array<StackTraceElement>, extraPrefixes: List<String>, view: View? = null) {
         val frame = CallSites.firstAppFrame(stack, extraPrefixes) ?: return
@@ -46,11 +117,11 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
         // animators, each with ids of its own that stay the same from run to run.
         val slot = name?.let { "${located.id}:$it" } ?: located.id
         when (animator) {
-            is ValueAnimator -> register(animator, located, slot, name, owner, stack, null, view)
+            is ValueAnimator -> register(animator, located, slot, name, owner, stack, extraPrefixes, null, view)
             is AnimatorSet -> animator.childAnimations.forEachIndexed { i, child ->
                 // A set's children share its call site; on API 26+ the set drives them, so seeking a child
                 // shows that child only. Good enough to see each part; a set-level time track is a next step.
-                if (child is ValueAnimator) register(child, located, "$slot/$i", name?.let { "$it[$i]" }, owner, stack, animator, view)
+                if (child is ValueAnimator) register(child, located, "$slot/$i", name?.let { "$it[$i]" }, owner, stack, extraPrefixes, animator, view)
             }
         }
     }
@@ -81,6 +152,7 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
         name: String?,
         owner: Activity?,
         stack: Array<StackTraceElement>,
+        extraPrefixes: List<String>,
         parent: AnimatorSet?,
         view: View?,
     ) {
@@ -100,7 +172,7 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
             }
             id = "$baseId#${++n}"
         }
-        val t = Tracked(animator, at, id, name, WeakReference(owner), stack, parent, view)
+        val t = Tracked(animator, at, id, name, WeakReference(owner), stack, extraPrefixes, parent, view)
         tracked[id] = t
         overrides[at.id]?.let { t.apply(it) }
         t.attach()
@@ -108,6 +180,7 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
 
     /** Stops reporting this animator (an AnimatorSet: its children); its signals leave the panel. */
     fun untrack(animator: Animator) {
+        settleNow(animator)
         val targets = if (animator is AnimatorSet) animator.childAnimations.toSet() else setOf(animator)
         val gone = tracked.values.filter { it.animator in targets }
         for (t in gone) {
@@ -131,6 +204,8 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
     }
 
     fun clear() {
+        reading.values.forEach { it.detach() }
+        reading.clear()
         tracked.values.forEach { it.dispose() }
         tracked.clear()
     }
@@ -142,6 +217,8 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
         val name: String?,
         val owner: WeakReference<Activity>,
         val registeredFrom: Array<StackTraceElement>,
+        /** The app's own animation helpers (KeyframerConfig.libraryPrefixes), skipped as the SDK is. */
+        val libraryPrefixes: List<String>,
         /** The AnimatorSet it was tracked through, which drives it on API 26+. */
         val parent: AnimatorSet?,
         explicitView: View?,
@@ -190,30 +267,57 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
             get() = animator.values?.map { it.propertyName.orEmpty() } ?: listOf("")
 
         private val updates = ValueAnimator.AnimatorUpdateListener { a ->
-            lastPlayTime = a.currentPlayTime
-            if (checkHints) {
-                checkHints = false
-                renderHints()
+            ownTime.time {
+                lastPlayTime = a.currentPlayTime
+                if (checkHints) {
+                    checkHints = false
+                    renderHints()
+                }
             }
         }
 
         private val lifecycle = object : AnimatorListenerAdapter() {
-            override fun onAnimationStart(animation: Animator) {
-                // The start's own stack when it holds app code (a tap handler), else where it was tracked.
-                val now = Throwable().stackTrace
-                val stack = if (CallSites.firstAppFrame(now) != null) now else registeredFrom
-                session()?.reportAnim(callSite(), listOf(args()), stack, durationMs())
+            override fun onAnimationStart(animation: Animator): Unit = ownTime.time {
+                session()?.let { s -> report(s, s.animStart()) }
                 ran = true
                 checkHints = true
             }
 
-            override fun onAnimationEnd(animation: Animator) {
+            override fun onAnimationEnd(animation: Animator): Unit = ownTime.time {
                 lastPlayTime = endTime()
                 pending?.let {
                     pending = null
                     apply(it)
                 }
             }
+        }
+
+        /**
+         * One start, with what it says of the animator read now. While recording its stack goes along: the
+         * start's own when it holds app code (a tap handler), else where the animator was tracked. It is
+         * taken here and read off the main thread, and the report follows: a stack read here, at every
+         * start, cost frames the inspector then reported as dropped.
+         */
+        private fun report(s: InspectorSession, start: InspectorSession.AnimStart) {
+            val site = callSite()
+            val args = listOf(args())
+            val duration = durationMs()
+            if (!start.recording) {
+                s.reportAnim(site, args, duration, start, null)
+                return
+            }
+            val from = registeredFrom
+            Stacks.read(Throwable(), { now -> s.frames(if (CallSites.firstAppFrame(now, libraryPrefixes) != null) now else from) }) { frames ->
+                s.reportAnim(site, args, duration, start, frames)
+            }
+        }
+
+        /** Starts made while its stack was read (see AnimatorTracker.track): reported now, at the times they happened. */
+        fun startedBefore(starts: List<InspectorSession.AnimStart>) {
+            val s = session() ?: return
+            for (start in starts) s.reportAnim(callSite(), listOf(args()), durationMs(), start, if (start.recording) s.frames(registeredFrom) else null)
+            ran = true
+            if (animator.isRunning) checkHints = true else lastPlayTime = endTime()
         }
 
         fun attach() {
@@ -313,7 +417,7 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
             val out = LinkedHashMap<String, List<Double>>()
             for (h in holders) {
                 val text = h.toString()
-                val nums = text.substringAfter(':', "").trim().split(Regex("\\s+")).mapNotNull { it.toDoubleOrNull() }
+                val nums = text.substringAfter(':', "").trim().split(SPACES).mapNotNull { it.toDoubleOrNull() }
                 if (nums.isNotEmpty()) out[h.propertyName.orEmpty().ifEmpty { "value" }] = nums
             }
             return out.ifEmpty { null }
@@ -365,6 +469,11 @@ internal class AnimatorTracker(private val session: () -> InspectorSession?) {
                 if (resume) animator.resume() else s.currentPlayTime = lastPlayTime
             }
         }
+    }
+
+    private companion object {
+        /** Compiled once: keyframes are read at every start. */
+        val SPACES = Regex("\\s+")
     }
 
     private fun targetName(target: Any): String {

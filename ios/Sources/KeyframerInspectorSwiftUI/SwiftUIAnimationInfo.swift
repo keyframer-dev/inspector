@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import CoreGraphics
 import Foundation
 import KeyframerInspectorCore
@@ -49,6 +50,24 @@ public struct SwiftUIAnimationInfo: Equatable {
     public var speed: Double = 1
     public var repeats: Repeat?
     public var autoreverses = false
+
+    /// Reads the common animations once, off the main thread. The first read of an `Animation` loads
+    /// the reflection metadata of SwiftUI's animation types: 9 ms on a Mac's simulator, which landed in
+    /// the first frame of the first traced animation of a recording.
+    public static func warmUp() {
+        _ = warmed
+    }
+
+    private static let warmed: Void = {
+        DispatchQueue.global(qos: .utility).async {
+            var common: [Animation] = [
+                .default, .linear(duration: 0.3), .easeInOut(duration: 0.3), .spring(response: 0.5, dampingFraction: 0.8),
+                .interpolatingSpring(stiffness: 100, damping: 10), .easeIn.delay(0.1).speed(2), .easeOut.repeatCount(2),
+            ]
+            if #available(iOS 17, macOS 14, *) { common += [.bouncy, .smooth, .snappy] }
+            for animation in common { _ = SwiftUIAnimationInfo(animation).config }
+        }
+    }()
 
     public init(_ animation: Animation) {
         kind = .other("Animation")
@@ -291,3 +310,4 @@ public struct SwiftUIAnimationInfo: Equatable {
     private static func round3(_ x: Double) -> Double { (x * 1000).rounded() / 1000 }
     private static func round1(_ x: Double) -> Double { (x * 10).rounded() / 10 }
 }
+#endif

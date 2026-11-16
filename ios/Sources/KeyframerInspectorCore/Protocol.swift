@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 // Swift mirrors of protocol/inspector.ts. Field names and optionality follow the TS types
@@ -77,10 +78,12 @@ public struct InspectorSignalSite: Codable, Hashable, Sendable {
     public var name: String?
     /// `scroll`: a scroll view's offset (playback scrolls the real view).
     public var kind: Kind?
+    /// The property it animates when known (`opacity` reads as a fade), several comma-joined.
+    public var prop: String?
     /// False when playback cannot write it back.
     public var writable: Bool?
 
-    public init(id: String, file: String, line: Int, column: Int? = nil, component: String?, name: String?, kind: Kind? = nil, writable: Bool? = nil) {
+    public init(id: String, file: String, line: Int, column: Int? = nil, component: String?, name: String?, kind: Kind? = nil, prop: String? = nil, writable: Bool? = nil) {
         self.id = id
         self.file = file
         self.line = line
@@ -88,10 +91,11 @@ public struct InspectorSignalSite: Codable, Hashable, Sendable {
         self.component = component
         self.name = name
         self.kind = kind
+        self.prop = prop
         self.writable = writable
     }
 
-    enum CodingKeys: String, CodingKey { case id, file, line, column, component, name, kind, writable }
+    enum CodingKeys: String, CodingKey { case id, file, line, column, component, name, kind, prop, writable }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -102,6 +106,7 @@ public struct InspectorSignalSite: Codable, Hashable, Sendable {
         try c.encode(component, forKey: .component)
         try c.encode(name, forKey: .name)
         try c.encodeIfPresent(kind, forKey: .kind)
+        try c.encodeIfPresent(prop, forKey: .prop)
         try c.encodeIfPresent(writable, forKey: .writable)
     }
 }
@@ -276,11 +281,14 @@ public struct InspectorFrameDrop: Codable, Hashable, Sendable {
     public var thread: InspectorThread
     public var ms: Double
     public var dropped: Int
-    public init(t: Double, thread: InspectorThread, ms: Double, dropped: Int) {
+    /// How long the inspector itself worked on the thread during the frame, when 0.5 ms or more.
+    public var inspectorMs: Double?
+    public init(t: Double, thread: InspectorThread, ms: Double, dropped: Int, inspectorMs: Double? = nil) {
         self.t = t
         self.thread = thread
         self.ms = ms
         self.dropped = dropped
+        self.inspectorMs = inspectorMs
     }
 }
 
@@ -543,3 +551,4 @@ extension InspectorMarker: Codable {
 
 /// Live edits keyed by call site id: param path to value.
 public typealias InspectorOverrides = [String: [String: Double]]
+#endif

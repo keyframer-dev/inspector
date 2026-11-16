@@ -1,4 +1,6 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
+import MachO
 
 /// One line of `Thread.callStackSymbols`:
 /// `3   MyApp    0x0000000102f3c1a4 $s5MyApp14ViewControllerC6bounceyyF + 120`
@@ -223,17 +225,38 @@ public struct CallSiteResolver: Sendable {
         appImages.contains(f.image)
     }
 
+    /// A Swift symbol of the inspector's own modules, by the module's mangled name (`18KeyframerInspector`),
+    /// which an extension of a system type (`CALayer.kf_add`) carries too. Matching the bare name would
+    /// also skip an app module that starts with it.
+    func isInspector(_ symbol: String) -> Bool {
+        skippedModules.contains { symbol.contains("\($0.utf8.count)\($0)") }
+    }
+
     /// The frames below the swizzled `-[CALayer addAnimation:forKey:]` (`kf_add`): everything above it
     /// is the inspector taking the stack, including compiler glue that carries no module name.
     public func callerFrames(_ frames: [SymbolFrame]) -> ArraySlice<SymbolFrame> {
-        if let i = frames.prefix(24).lastIndex(where: { $0.symbol.contains("kf_add") }) { return frames[(i + 1)...] }
-        return frames[...]
+        frames[callerStart(StackFrames(frames, resolver: self))...]
+    }
+
+    /// Where the caller's frames start: after the last `kf_add` among the first 24 frames. The inspector
+    /// is linked into the app's image, so only app frames are looked at (no symbol lookup for the rest).
+    func callerStart(_ stack: StackFrames) -> Int {
+        var start = 0
+        for i in 0..<min(24, stack.count) where stack.isApp(i) && stack.frame(i).symbol.contains("kf_add") { start = i + 1 }
+        return start
     }
 
     /// The first app frame that is not the inspector's own code nor compiler glue.
     public func resolve(_ frames: [SymbolFrame], describe: (String) -> SymbolName = SymbolName.describe) -> ResolvedSite? {
-        for f in callerFrames(frames) where isAppFrame(f) {
-            if f.symbol.contains("KeyframerInspector") { continue }
+        resolve(StackFrames(frames, resolver: self), describe: describe)
+    }
+
+    /// The same for a stack read lazily: only app frames are ever looked up, which is what makes it
+    /// cheap enough for the main thread (a system image's symbol table is the slow part).
+    public func resolve(_ stack: StackFrames, describe: (String) -> SymbolName = SymbolName.describe) -> ResolvedSite? {
+        for i in callerStart(stack)..<stack.count where stack.isApp(i) {
+            let f = stack.frame(i)
+            if isInspector(f.symbol) { continue }
             let name = describe(f.symbol)
             if let m = name.module, skippedModules.contains(m) { continue }
             if name.isThunk || name.isEntryPoint { continue }
@@ -245,38 +268,251 @@ public struct CallSiteResolver: Sendable {
     /// The stack as protocol frames: `lineNumber` 0 (unknown at runtime), with the image, the offset
     /// into it (what `atos` needs, from `imageOffset`) and the raw symbol, so the Mac can resolve lines.
     /// Library frames are marked `collapse`.
-    public func stackFrames(_ frames: [SymbolFrame], describe: (String) -> SymbolName = SymbolName.describe, imageOffset: (UInt64) -> Int? = ImageOffset.of, limit: Int = 40) -> [InspectorStackFrame] {
-        var out: [InspectorStackFrame] = []
-        for f in callerFrames(frames) {
-            if f.symbol.contains("KeyframerInspector") { continue }
-            let name = describe(f.symbol)
-            if let m = name.module, skippedModules.contains(m) { continue }
-            if name.isThunk { continue }
-            out.append(InspectorStackFrame(
-                methodName: name.display, file: f.image, lineNumber: 0, column: 0,
-                collapse: isAppFrame(f) ? nil : true,
-                image: f.image, offset: imageOffset(f.address), symbol: f.symbol
-            ))
-            if out.count >= limit { break }
-        }
-        return out
+    public func stackFrames(_ frames: [SymbolFrame], describe: (String) -> SymbolName = SymbolName.describe, imageOffset: @escaping (UInt64) -> Int? = ImageOffset.of, limit: Int = 40) -> [InspectorStackFrame] {
+        describeStack(StackFrames(frames, resolver: self, imageOffset: imageOffset), describe: describe, limit: limit).frames
     }
 
     /// The stack in the V8 shape the panel already parses (`    at name (file:line:column)`). Native
     /// frames have no line here, so `file` is `image+0xoffset-in-symbol`: something `atos` on the Mac
     /// can turn into a line later. Inspector frames are dropped like on React Native.
     public func formatStack(_ frames: [SymbolFrame], describe: (String) -> SymbolName = SymbolName.describe, limit: Int = 40, maxChars: Int = 4000) -> String {
+        describeStack(StackFrames(frames, resolver: self), describe: describe, limit: limit, maxChars: maxChars).stack
+    }
+
+    /// Both shapes in one pass over the stack: the `stack` text and the protocol `frames`.
+    public func describeStack(_ stack: StackFrames, describe: (String) -> SymbolName = SymbolName.describe, limit: Int = 40, maxChars: Int = 4000) -> DescribedStack {
         var lines: [String] = []
-        for f in callerFrames(frames) {
-            if f.symbol.contains("KeyframerInspector") { continue }
+        var out: [InspectorStackFrame] = []
+        for i in callerStart(stack)..<stack.count {
+            let f = stack.frame(i)
+            if isInspector(f.symbol) { continue }
             let name = describe(f.symbol)
             if let m = name.module, skippedModules.contains(m) { continue }
             if name.isThunk { continue }
             lines.append("    at \(name.display) (\(f.image)+0x\(String(f.offset, radix: 16)):0:0)")
-            if lines.count >= limit { break }
+            out.append(InspectorStackFrame(
+                methodName: name.display, file: f.image, lineNumber: 0, column: 0,
+                collapse: stack.isApp(i) ? nil : true,
+                image: f.image, offset: stack.imageOffset(i), symbol: f.symbol
+            ))
+            if out.count >= limit { break }
         }
         let text = "Error\n" + lines.joined(separator: "\n")
-        return text.count > maxChars ? String(text.prefix(maxChars)) : text
+        return DescribedStack(stack: text.count > maxChars ? String(text.prefix(maxChars)) : text, frames: out)
+    }
+}
+
+/// A stack as an event carries it: the V8-shaped text and the protocol frames.
+public struct DescribedStack: Hashable, Sendable {
+    public var stack: String
+    public var frames: [InspectorStackFrame]
+
+    public init(stack: String, frames: [InspectorStackFrame]) {
+        self.stack = stack
+        self.frames = frames
+    }
+}
+
+/// A stack's frames as the resolver reads them, by index: whether a frame is the app's is cheap to
+/// tell, the frame itself (its symbol) may be looked up only when asked for.
+public struct StackFrames {
+    public let count: Int
+    public let isApp: (Int) -> Bool
+    public let frame: (Int) -> SymbolFrame
+    public let imageOffset: (Int) -> Int?
+
+    public init(count: Int, isApp: @escaping (Int) -> Bool, frame: @escaping (Int) -> SymbolFrame, imageOffset: @escaping (Int) -> Int?) {
+        self.count = count
+        self.isApp = isApp
+        self.frame = frame
+        self.imageOffset = imageOffset
+    }
+
+    /// Frames already read (`Thread.callStackSymbols` lines, the tests).
+    public init(_ frames: [SymbolFrame], resolver: CallSiteResolver, imageOffset: @escaping (UInt64) -> Int? = ImageOffset.of) {
+        self.init(count: frames.count, isApp: { resolver.isAppFrame(frames[$0]) }, frame: { frames[$0] }, imageOffset: { imageOffset(frames[$0].address) })
+    }
+}
+
+// MARK: - Stacks taken as return addresses
+
+/// A stack taken where it matters (inside the swizzle, inside withKeyframerAnimation) as return
+/// addresses only: `backtrace`, no symbol lookup. Looking symbols up is what costs (`dladdr` searches an
+/// image's symbol table, and a SwiftUI stack runs past a hundred frames), so `Thread.callStackSymbols`
+/// on the main thread added tens of ms to the frame an animation started in. Symbols are read later,
+/// off the main thread, through `StackSymbols` (once per address). Several events may share one stack
+/// (a withKeyframerAnimation moving three traced values): it is described once.
+public final class CapturedStack: @unchecked Sendable {
+    public let addresses: [UInt]
+    private let lock = NSLock()
+    private var described: DescribedStack?
+
+    public init(addresses: [UInt]) {
+        self.addresses = addresses
+    }
+
+    /// The calling thread's return addresses, innermost first, this function's own frame left out.
+    @inline(never)
+    public static func capture(max: Int = 256) -> CapturedStack {
+        var buffer = [UnsafeMutableRawPointer?](repeating: nil, count: max)
+        let n = Int(backtrace(&buffer, Int32(max)))
+        return CapturedStack(addresses: buffer.prefix(n).dropFirst().map { UInt(bitPattern: $0) })
+    }
+
+    /// `make()` the first time, the same answer after.
+    public func described(_ make: () -> DescribedStack) -> DescribedStack {
+        lock.lock()
+        defer { lock.unlock() }
+        if let described { return described }
+        let d = make()
+        described = d
+        return d
+    }
+}
+
+/// Symbols for return addresses, read with `dladdr` (what `Thread.callStackSymbols` does for every
+/// frame, every time) and kept per address: an app's animations come from a few code paths, so after
+/// the first time a frame costs a dictionary lookup. Whether an address is the app's is told from the
+/// app images' `__TEXT` ranges, without any lookup. Thread-safe.
+public final class StackSymbols: @unchecked Sendable {
+    public let resolver: CallSiteResolver
+    private let lock = NSLock()
+    private var symbols: [UInt: (image: String, symbol: String, offset: Int, imageOffset: Int?)] = [:]
+    private var names: [String: SymbolName] = [:]
+    private var appRanges: [Range<UInt>] = []
+    private var scannedImages: UInt32 = 0
+
+    public init(resolver: CallSiteResolver) {
+        self.resolver = resolver
+    }
+
+    /// `stack`'s frames, each looked up only when the resolver asks for it.
+    public func frames(of stack: CapturedStack) -> StackFrames {
+        let addresses = stack.addresses
+        return StackFrames(
+            count: addresses.count,
+            isApp: { [self] in isApp(addresses[$0]) },
+            frame: { [self] in frame(at: $0, address: addresses[$0]) },
+            imageOffset: { [self] in lookUp(addresses[$0]).imageOffset }
+        )
+    }
+
+    /// The first app frame of `stack` that is not the inspector's own nor compiler glue.
+    public func resolve(_ stack: CapturedStack) -> ResolvedSite? {
+        resolver.resolve(frames(of: stack), describe: describe)
+    }
+
+    /// `stack` as an event carries it, worked out once per stack.
+    public func describe(_ stack: CapturedStack) -> DescribedStack {
+        stack.described { resolver.describeStack(frames(of: stack), describe: describe) }
+    }
+
+    /// `SymbolName.describe`, kept per symbol.
+    public func describe(_ symbol: String) -> SymbolName {
+        lock.lock()
+        if let cached = names[symbol] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+        let name = SymbolName.describe(symbol)
+        lock.lock()
+        if names.count > 5000 { names = [:] }
+        names[symbol] = name
+        lock.unlock()
+        return name
+    }
+
+    public func frame(at index: Int, address: UInt) -> SymbolFrame {
+        let s = lookUp(address)
+        return SymbolFrame(index: index, image: s.image, address: UInt64(address), symbol: s.symbol, offset: s.offset)
+    }
+
+    /// Does the first-time work of reading a stack now, off the main thread: the app images' `__TEXT`
+    /// ranges, and one `dladdr` in each app image, whose first lookup indexes the image's symbols (30 ms
+    /// for a large debug dylib). The first animation's stack then took 3.5 ms to read, not 13.6.
+    public func prepare() {
+        DispatchQueue.global(qos: .utility).async { [self] in
+            _ = isApp(0)
+            lock.lock()
+            let ranges = appRanges
+            lock.unlock()
+            var info = Dl_info()
+            for r in ranges {
+                guard let p = UnsafeRawPointer(bitPattern: r.lowerBound + (r.upperBound - r.lowerBound) / 2) else { continue }
+                _ = dladdr(p, &info)
+            }
+        }
+    }
+
+    /// Inside the `__TEXT` of one of the app's images (`resolver.appImages`, by file name).
+    public func isApp(_ address: UInt) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let count = _dyld_image_count()
+        if count != scannedImages {
+            scannedImages = count
+            appRanges = Self.textRanges { resolver.appImages.contains($0) }
+        }
+        return appRanges.contains { $0.contains(address) }
+    }
+
+    /// One frame the way `backtrace_symbols` prints it: the image's file name, the closest symbol and
+    /// the distance from it (the image's name and the distance from its start when there is none).
+    private func lookUp(_ address: UInt) -> (image: String, symbol: String, offset: Int, imageOffset: Int?) {
+        lock.lock()
+        if let hit = symbols[address] {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+        var info = Dl_info()
+        var entry: (image: String, symbol: String, offset: Int, imageOffset: Int?) = ("???", String(format: "0x%lx", address), 0, nil)
+        if let pointer = UnsafeRawPointer(bitPattern: address), dladdr(pointer, &info) != 0 {
+            let image = info.dli_fname.map { (String(cString: $0) as NSString).lastPathComponent } ?? "???"
+            let base = info.dli_fbase.map { UInt(bitPattern: $0) }
+            if let name = info.dli_sname, let start = info.dli_saddr {
+                entry = (image, String(cString: name), Int(bitPattern: address &- UInt(bitPattern: start)), base.map { Int(bitPattern: address &- $0) })
+            } else {
+                entry = (image, image, base.map { Int(bitPattern: address &- $0) } ?? 0, base.map { Int(bitPattern: address &- $0) })
+            }
+        }
+        lock.lock()
+        if symbols.count > 20000 { symbols = [:] }
+        symbols[address] = entry
+        lock.unlock()
+        return entry
+    }
+
+    /// The `__TEXT` ranges of the loaded images whose file name `keep` accepts.
+    static func textRanges(_ keep: (String) -> Bool) -> [Range<UInt>] {
+        var out: [Range<UInt>] = []
+        for i in 0..<_dyld_image_count() {
+            guard let name = _dyld_get_image_name(i), let header = _dyld_get_image_header(i) else { continue }
+            guard keep((String(cString: name) as NSString).lastPathComponent) else { continue }
+            if let range = textRange(header: UnsafeRawPointer(header), slide: _dyld_get_image_vmaddr_slide(i)) { out.append(range) }
+        }
+        return out
+    }
+
+    private static func textRange(header: UnsafeRawPointer, slide: Int) -> Range<UInt>? {
+        let mh = header.loadUnaligned(as: mach_header_64.self)
+        guard mh.magic == MH_MAGIC_64 else { return nil }
+        var cursor = header + MemoryLayout<mach_header_64>.size
+        for _ in 0..<mh.ncmds {
+            let lc = cursor.loadUnaligned(as: load_command.self)
+            if lc.cmd == UInt32(LC_SEGMENT_64) {
+                let seg = cursor.loadUnaligned(as: segment_command_64.self)
+                let name = withUnsafeBytes(of: seg.segname) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+                if name == "__TEXT" {
+                    let start = UInt(bitPattern: Int(truncatingIfNeeded: Int64(bitPattern: seg.vmaddr) &+ Int64(slide)))
+                    return start..<(start + UInt(seg.vmsize))
+                }
+            }
+            guard lc.cmdsize > 0 else { break }
+            cursor += Int(lc.cmdsize)
+        }
+        return nil
     }
 }
 
@@ -289,3 +525,4 @@ public enum ImageOffset {
         return Int(address - UInt64(UInt(bitPattern: base)))
     }
 }
+#endif

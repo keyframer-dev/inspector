@@ -488,22 +488,42 @@ export function suspectsFor(s: InspectorSession, drop: InspectorFrameDrop): Drop
   const commits = s.commits.filter((c) => c.t >= drop.t - drop.ms - 4 * k && c.t <= to + 16 * k).sort((a, b) => b.ms - a.ms)
   // The recorder's own screenshots hold the UI thread up: say so rather than blame the app.
   const shot = s.screenshots?.find((x) => x.t <= drop.t + 4 && x.t + x.ms >= drop.t - drop.ms - 4)
+  const own = drop.inspectorMs ? `The inspector worked ${drop.inspectorMs} ms of this frame` : null
   const hints = shot
     ? [`The recorder took a screenshot during this frame (${Math.round(shot.ms)} ms): this drop is likely its own, not the app's.`]
-    : hintsFor(drop, anims, commits, appOf(s))
+    : own && inspectorsDrop(drop)
+      ? [`${own}: without that work it would not have dropped, so this drop is the inspector's, not the app's.`]
+      : [...(own ? [`${own}.`] : []), ...hintsFor(drop, anims, commits, appOf(s))]
   return { anims, commits, hints }
 }
 
 /**
- * Long frames the recorder's screenshots did not cause, outside the times the editor paused the app's
- * animations (a paused clock can read as one long frame) and the app was in the background (the
- * system stops its frames there): the ones that count.
+ * A drop the inspector's own work made: without its `inspectorMs` the frame would have dropped none,
+ * counted as the frame meter counts (the frame's length in budgets, rounded; the budget read back
+ * from `ms` and `dropped`).
+ */
+export function inspectorsDrop(d: InspectorFrameDrop): boolean {
+  if (!d.inspectorMs || d.ms <= 0) return false
+  return Math.round(((d.ms - d.inspectorMs) * (d.dropped + 1)) / d.ms) - 1 <= 0
+}
+
+/**
+ * Long frames the recorder's screenshots and the inspector's own work did not cause, outside the
+ * times the editor paused the app's animations (a paused clock can read as one long frame) and the
+ * app was in the background (the system stops its frames there): the ones that count.
  */
 export function appDrops(s: InspectorSession): InspectorFrameDrop[] {
   const shots = s.screenshots ?? []
   const clock = appClockOf(s.markers)
   const away = backgroundSpans(s.markers)
-  return s.drops.filter((d) => d.dropped > 0 && !shots.some((x) => x.t <= d.t + 4 && x.t + x.ms >= d.t - d.ms - 4) && !clock.paused(d.t - d.ms, d.t) && !inBackground(away, d.t - d.ms, d.t))
+  return s.drops.filter(
+    (d) =>
+      d.dropped > 0 &&
+      !inspectorsDrop(d) &&
+      !shots.some((x) => x.t <= d.t + 4 && x.t + x.ms >= d.t - d.ms - 4) &&
+      !clock.paused(d.t - d.ms, d.t) &&
+      !inBackground(away, d.t - d.ms, d.t),
+  )
 }
 
 function hintsFor(drop: InspectorFrameDrop, anims: TraceAnim[], commits: InspectorCommit[], app?: InspectorAppInfo): string[] {

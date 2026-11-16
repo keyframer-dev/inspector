@@ -73,20 +73,19 @@ Restart Metro with a clean cache after the Babel change: `npx expo start -c`.
 
 ## 2b. iOS
 
-Add the package `https://github.com/keyframer-dev/inspector` (from `0.1.0`), product `KeyframerInspector`. Start it once the first window is up:
+Add the package `https://github.com/keyframer-dev/inspector` (from `0.3.0`), product `KeyframerInspector`. Start it once the first window is up:
 
 ```swift
 import KeyframerInspector
 
-#if DEBUG
-KeyframerInspector.start()                              // simulator
-// KeyframerInspector.start(.init(host: "192.168.1.20")) // a device: the Mac's LAN address
-#endif
+KeyframerInspector.start(.init(onlyWhenAsked: true))   // runs when launched with -keyframer YES
 ```
 
-A physical device also needs Info.plist keys: `NSLocalNetworkUsageDescription`, `NSAppTransportSecurity > NSAllowsLocalNetworking = YES`, and `CADisableMinimumFrameDurationOnPhone = YES` for 120 Hz.
+Launch it with `-keyframer YES` (simulator), or `-keyframerHost <Mac LAN IP>` on a device: launch arguments in the scheme, `xcrun simctl launch <udid> <bundle id> -keyframer YES`, or `xcrun devicectl device process launch ... -keyframerHost <ip>`. Release builds compile the inspector out (no `#if DEBUG` needed). The package needs Swift tools 6.1 (Xcode 16.3+).
 
-SwiftUI: add the product `KeyframerInspectorSwiftUI`, use `withKeyframerAnimation(...)` in place of `withAnimation(...)`, and add `.keyframerTrace("name", value: x)` before the `.animation` modifiers of each value to see. Values outside a trace are not seen.
+A physical device also needs `NSLocalNetworkUsageDescription` (put `INFOPLIST_KEY_NSLocalNetworkUsageDescription` in the Debug configuration's build settings) and `CADisableMinimumFrameDurationOnPhone = YES` for 120 Hz. `ws://` to an IP address needs no ATS exception.
+
+SwiftUI: add the product `KeyframerInspectorSwiftUI`, use `withKeyframerAnimation(...)` in place of `withAnimation(...)`, add `.keyframerTrace("name", value: x)` before the `.animation` modifiers of each value to see, and `.keyframerScreen("Settings")` on each screen (otherwise the whole app is one route, `App`). Values outside a trace are seen only as the layers a `withKeyframerAnimation` moved, recorded as signals of its call site. A helper that wraps these passes its caller's `file:filePath:line:column:` on.
 
 Check that the app builds with `xcodebuild` for an iOS destination, not `swift build`.
 
@@ -94,11 +93,11 @@ Check that the app builds with `xcodebuild` for an iOS destination, not `swift b
 
 ```kotlin
 // build.gradle.kts, Views
-debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")
+debugImplementation("dev.keyframer:keyframer-inspector:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.3.0")
 // or Compose (replaces the two lines above)
-debugImplementation("dev.keyframer:keyframer-inspector-compose:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.2.0")
+debugImplementation("dev.keyframer:keyframer-inspector-compose:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.3.0")
 ```
 
 ```kotlin
@@ -108,14 +107,14 @@ Keyframer.start(this)
 
 - Allow cleartext to the relay host only, with a `network_security_config.xml`.
 - Views: register animators, `ObjectAnimator.ofFloat(title, View.ALPHA, 0f, 1f).kfTrack("title").start()`, and other values with `Keyframer.signal("name", view, read = { ... }, write = { ... })`.
-- Compose: rename the calls (`kfAnimateFloatAsState`, `kfAnimateDpAsState`, `kfUpdateTransition`, `rememberKfInfiniteTransition`, `rememberKfAnimatable` with `kfAnimateTo`).
+- Compose: rename the calls (`kfAnimateFloatAsState`, `kfAnimateDpAsState`, `kfUpdateTransition`, `rememberKfInfiniteTransition`, `rememberKfAnimatable` with `kfAnimateTo`), and name screens with `KfScreen("Settings")` at the top of each screen's content and `KfNavigation(navController)` next to the NavHost.
 - The emulator reaches `10.0.2.2:8790` by itself. A device: `adb reverse tcp:8790 tcp:8790`.
 
 ## 2d. Flutter
 
 ```yaml
 dependencies:
-  keyframer_inspector: ^0.2.0
+  keyframer_inspector: ^0.3.0
 ```
 
 ```dart
@@ -124,7 +123,7 @@ void main() => runApp(const KeyframerInspector(app: 'My app', appPackage: 'my_ap
 // AnimationController( becomes KfAnimationController(..., name: 'card')
 ```
 
-`appPackage` is the pubspec `name`. A physical device: `flutter run --dart-define=KEYFRAMER_HOST=<Mac LAN IP>`. Implicit animations need `flutter run` (widget creation tracking), not `flutter build ios --debug`.
+`appPackage` is the pubspec `name`. A physical device: `flutter run --dart-define=KEYFRAMER_HOST=<Mac LAN IP>`. Implicit animations need `flutter run` (widget creation tracking), not `flutter build ios --debug`. `KeyframerScreen(name: 'Settings', child: ...)` names a screen the navigator cannot (a tab, a pager's page); a nested navigator needs a `KfNavigatorObserver()` of its own. `--dart-define=KEYFRAMER_INSPECTOR=false` turns the inspector off in any build.
 
 ## 3. Connect the MCP server
 

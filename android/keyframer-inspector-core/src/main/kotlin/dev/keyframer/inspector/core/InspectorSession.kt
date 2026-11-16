@@ -26,6 +26,10 @@ import kotlin.math.roundToLong
  *     the speed when it is not 1;
  *   - reconnects with a backoff from 500 ms to 10 s.
  *
+ * Everything it does on its thread is timed as the inspector's own work ([OwnTime]), except the app
+ * code it runs on request (scenarios, replay, the app's navigator): long frames while recording say
+ * how much of them was the inspector's.
+ *
  * Single threaded: construct it and call it on the Scheduler's thread.
  */
 class InspectorSession(
@@ -35,6 +39,13 @@ class InspectorSession(
     private val clock: Clock,
     private val host: Host,
     private val batchMs: Long = 100,
+    /**
+     * Packages of the app's own animation helpers (KeyframerConfig.libraryPrefixes): collapsed in an
+     * event's frames as the platform's are, the same frames the call site skips.
+     */
+    private val libraryPrefixes: List<String> = emptyList(),
+    /** The inspector's own work on the session's thread, shared with the platform layer's sections. */
+    private val ownTime: OwnTime = OwnTime(),
 ) {
     companion object {
         const val MAX_QUEUED_EVENTS = 2000
@@ -93,8 +104,8 @@ class InspectorSession(
         frameConsumers.add(c)
         if (frameLoop == null) {
             frameLoop = host.frames.start(
-                { v -> for (f in frameConsumers.toList()) f.onFrame(v) },
-                { v -> for (f in frameConsumers.toList()) f.afterFrame(v) },
+                { v -> ownTime.time { for (f in frameConsumers.toList()) f.onFrame(v) } },
+                { v -> ownTime.time { for (f in frameConsumers.toList()) f.afterFrame(v) } },
             )
         }
     }
@@ -115,14 +126,14 @@ class InspectorSession(
     }
 
     /** Adds a signal, or replaces the one with the same id (a screen re-created: same call site, new value). */
-    fun addSignal(signal: Signal) {
+    fun addSignal(signal: Signal): Unit = ownTime.time {
         signals[signal.site.id] = signal
         enqueue(Event.Signal(signal.site))
     }
 
     /** A signal went away (its screen closed, or it was untracked): editors drop it from their catalog. */
-    fun removeSignal(id: String) {
-        if (signals.remove(id) == null) return
+    fun removeSignal(id: String): Unit = ownTime.time {
+        if (signals.remove(id) == null) return@time
         catalog.remove("signal:$id")
         catalog.keys.removeAll { it.startsWith("renderHint:$id:") }
         recording.remove(id)
@@ -140,10 +151,10 @@ class InspectorSession(
      * Something about how the view behind signal `id` is drawn that costs more than it needs to (see
      * Event.RenderHint). Kept with the catalog, so an editor that joins later hears about it too.
      */
-    fun reportRenderHint(id: String, hint: String, detail: String? = null) {
+    fun reportRenderHint(id: String, hint: String, detail: String? = null): Unit = ownTime.time {
         val e = Event.RenderHint(id, hint, detail)
         // Once per signal and hint: an animator made again for the same view (one per tap) says nothing new.
-        if (catalog["renderHint:$id:$hint"] == e) return
+        if (catalog["renderHint:$id:$hint"] == e) return@time
         enqueue(e)
     }
 
@@ -155,33 +166,69 @@ class InspectorSession(
      * An animation started. `stack` is the stack of the call that started it: while recording it rides
      * along as frames (`t` places it on the recording's clock).
      */
-    fun reportAnim(site: CallSite, args: List<Any?>, stack: Array<StackTraceElement>? = null, durationMs: Long? = null): Int {
+    fun reportAnim(site: CallSite, args: List<Any?>, stack: Array<StackTraceElement>? = null, durationMs: Long? = null): Int =
+        reportAnim(site, args, durationMs) { stack }
+
+    /**
+     * [reportAnim], with the stack taken only when it is sent: `stack` runs while recording, never
+     * otherwise. Taking a stack is the costliest part of a report, and an animator taking one on the main
+     * thread at every start made the inspector add the frame drops it measures. Its frames are made once,
+     * here.
+     */
+    fun reportAnim(site: CallSite, args: List<Any?>, durationMs: Long?, stack: () -> Array<StackTraceElement>?): Int = ownTime.time {
+        val start = animStart()
+        reportAnim(site, args, durationMs, start, if (start.recording) stack()?.let { frames(it) } else null)
+    }
+
+    /** When an animation started, stamped as it happens, for a report made once its stack is read. */
+    class AnimStart internal constructor(internal val at: Long, internal val t: Long?) {
+        /** It started while recording: its report carries its stack's frames. */
+        val recording: Boolean get() = t != null
+    }
+
+    /** Stamps an animation's start now (see [AnimStart]). */
+    fun animStart(): AnimStart = AnimStart(clock.wallMs(), if (isRecording) elapsed() else null)
+
+    /**
+     * An animation that started at `start`, reported later: its stack was read off the main thread,
+     * where reading one costs more than everything else a report does. `frames` ([frames] of that
+     * stack) go along when it started while recording.
+     */
+    fun reportAnim(site: CallSite, args: List<Any?>, durationMs: Long?, start: AnimStart, frames: List<StackFrame>?): Int = ownTime.time {
         val eid = nextEid++
-        val recordingNow = isRecording
         enqueue(
             Event.Anim(
                 eid = eid,
                 site = site,
-                at = clock.wallMs(),
+                at = start.at,
                 args = args,
                 thread = "js",
-                t = if (recordingNow) elapsed() else null,
-                frames = if (recordingNow && stack != null) CallSites.frames(stack) else null,
+                t = start.t,
+                frames = if (start.recording) frames else null,
                 durationMs = durationMs,
             ),
         )
-        return eid
+        eid
     }
 
-    fun registerScenario(name: String, scenario: Scenario): () -> Unit {
+    /**
+     * A stack as an event's frames: library frames collapsed, the app's own helpers (`libraryPrefixes`)
+     * too. Pure, so it can run on any thread.
+     */
+    fun frames(stack: Array<StackTraceElement>): List<StackFrame> = CallSites.frames(stack, extraLibraryPrefixes = libraryPrefixes)
+
+    fun registerScenario(name: String, scenario: Scenario): () -> Unit = ownTime.time {
         scenarios[name] = scenario
         sendRaw(AppMessage.Scenarios(scenarios.keys.toList()))
-        return {
-            if (scenarios[name] === scenario) {
-                scenarios.remove(name)
-                sendRaw(AppMessage.Scenarios(scenarios.keys.toList()))
+        val unregister: () -> Unit = {
+            ownTime.time {
+                if (scenarios[name] === scenario) {
+                    scenarios.remove(name)
+                    sendRaw(AppMessage.Scenarios(scenarios.keys.toList()))
+                }
             }
         }
+        unregister
     }
 
     fun dispose() {
@@ -224,8 +271,8 @@ class InspectorSession(
         return s.send(Json.encode(msg))
     }
 
-    fun flush() {
-        if (!open) return
+    fun flush(): Unit = ownTime.time {
+        if (!open) return@time
         if (queue.isNotEmpty()) {
             sendRaw(AppMessage.Events(queue))
             queue = ArrayList()
@@ -287,8 +334,11 @@ class InspectorSession(
     }
 
     private fun onSession(block: () -> Unit) {
-        scheduler.post(0) { if (!disposed) block() }
+        later(0) { if (!disposed) block() }
     }
+
+    /** `block` on the session's thread after `delayMs`, timed as the inspector's work. */
+    private fun later(delayMs: Long, block: () -> Unit): Cancellable = scheduler.post(delayMs) { ownTime.time(block) }
 
     private fun opened() {
         open = true
@@ -305,7 +355,7 @@ class InspectorSession(
         // Nobody is left to stop them: the editors that come back say again what they record.
         if (isRecording) stopRecording()
         if (disposed) return
-        reconnect = scheduler.post(backoff) { connect() }
+        reconnect = later(backoff) { connect() }
         backoff = minOf(backoff * 2, MAX_BACKOFF_MS)
     }
 
@@ -315,7 +365,8 @@ class InspectorSession(
                 overrides = msg.overrides
                 onOverrides?.invoke(overrides)
             }
-            EditorMessage.Replay -> host.replay()
+            // The app's own code, run on request: its frames are the app's.
+            EditorMessage.Replay -> ownTime.app { host.replay() }
             is EditorMessage.Record -> setRecording(msg.signalIds, msg.on, msg.recorder)
             is EditorMessage.Playback -> playback(msg.samples, msg.routes)
             is EditorMessage.Capture -> capture(msg)
@@ -400,10 +451,23 @@ class InspectorSession(
     /** Recording `['*']` counts with no signal yet: frames, markers and animations are recorded all the same. */
     val isRecording: Boolean get() = recorders.isNotEmpty()
 
+    /**
+     * Whether the recording gets samples of `id` now: an editor records it, and it reads as a number (an
+     * animator of objects never does). Visibility markers are only for these: one about a value the
+     * recording has no samples of points at nothing.
+     */
+    fun sampled(id: String): Boolean {
+        if (id !in recording) return false
+        val v = signals[id]?.read() ?: return false
+        return v.isFinite()
+    }
+
     private val recorder = object : FrameConsumer {
         override fun onFrame(vsync: Double) {
             val m = meter ?: return
-            m.tick(vsync - recordStart)
+            // The inspector's work so far: what it grew by since the last frame was its part of this one.
+            // This callback's own work (the sampling after it) counts toward the next frame.
+            m.tick(vsync - recordStart, ownTime.totalMs)
             if (m.stats.isNotEmpty()) frameStats.addAll(m.stats).also { m.stats.clear() }
             if (m.drops.isNotEmpty()) drops.addAll(m.drops).also { m.drops.clear() }
         }
@@ -424,7 +488,7 @@ class InspectorSession(
      * stops when the last one does.
      */
     @JvmOverloads
-    fun setRecording(ids: List<String>, on: Boolean, recorder: String? = null) {
+    fun setRecording(ids: List<String>, on: Boolean, recorder: String? = null): Unit = ownTime.time {
         val was = isRecording
         val key = recorder ?: ""
         val all = "*" in ids
@@ -466,6 +530,7 @@ class InspectorSession(
             // A display that says its rate: frames are counted against it (and its changes, below).
             if (host.display != null) m.setRefreshRate(rate.toDouble()) else m.hintRefreshRate(rate)
             meter = m
+            ownTime.meter(true)
             addFrames(recorder)
             startMarkers(rate)
             val shift = -recordStart.roundToLong()
@@ -475,6 +540,7 @@ class InspectorSession(
             }
         } else {
             meter = null
+            ownTime.meter(false)
             removeFrames(recorder)
             unwatchMarkers?.cancel()
             unwatchMarkers = null
@@ -520,14 +586,14 @@ class InspectorSession(
         playing = null
     }
 
-    fun playback(recorded: List<Sample>, routes: List<Route> = emptyList()) {
+    fun playback(recorded: List<Sample>, routes: List<Route> = emptyList()): Unit = ownTime.time {
         stopPlayback()
         releaseHeld()
         val ordered = recorded.sortedBy { it.t }
         val screens = routes.sortedBy { it.t }
         if (ordered.isEmpty()) {
             screens.firstOrNull()?.let { host.navigateTo(it.route, it.params) }
-            return
+            return@time
         }
         val t0 = minOf(ordered.first().t, screens.firstOrNull()?.t ?: Long.MAX_VALUE)
         val start = clock.nowMs()
@@ -600,14 +666,14 @@ class InspectorSession(
                 host.capture(msg.format, msg.quality, msg.width) { data, error ->
                     onSession {
                         sendRaw(if (data != null) AppMessage.Frame(msg.id, data, msg.format) else AppMessage.Frame(msg.id, error = error ?: "capture failed"))
-                        captureRelease = scheduler.post(CAPTURE_RELEASE_MS) { releaseHeld() }
+                        captureRelease = later(CAPTURE_RELEASE_MS) { releaseHeld() }
                         nextCapture()
                     }
                 }
             }
         }
         val route = msg.route
-        if (route != null && host.navigateTo(route.route, route.params)) scheduler.post(ROUTE_SETTLE_MS) { show() } else show()
+        if (route != null && host.navigateTo(route.route, route.params)) later(ROUTE_SETTLE_MS) { show() } else show()
     }
 
     private fun afterFrames(n: Int, then: () -> Unit) {
@@ -642,7 +708,8 @@ class InspectorSession(
             }
         }
         try {
-            s.run(done)
+            // The app's own code, run on request: its frames are the app's.
+            ownTime.app { s.run(done) }
         } catch (e: Throwable) {
             done(e)
         }
@@ -654,8 +721,8 @@ class InspectorSession(
         var current: Cancellable? = null
         var stopped = false
         fun schedule() {
-            current = scheduler.post(everyMs) {
-                if (stopped) return@post
+            current = later(everyMs) {
+                if (stopped) return@later
                 block()
                 schedule()
             }

@@ -38,13 +38,14 @@ KEYFRAMER_RELAY_URL=ws://127.0.0.1:8790 npx keyframer-inspect ci
 
 ## iOS
 
-Set in the scheme's environment. They win over code.
+Set in the scheme's environment. They win over code and over the launch arguments (`-keyframer YES`, `-keyframerHost`, `-keyframerPort`, `-keyframerSystem YES`), which do the same; see [iOS](../getting-started/ios.md).
 
 | Variable | |
 |---|---|
 | `KEYFRAMER_INSPECTOR_HOST` | The relay's host |
 | `KEYFRAMER_INSPECTOR_PORT` | The relay's port |
-| `KEYFRAMER_INSPECTOR` | `0` off, `1` on (even in release) |
+| `KEYFRAMER_INSPECTOR` | `0` off, `1` on, whatever the code says. Release builds compile the inspector out, unless the package's `ReleaseBuilds` trait is on |
+| `KEYFRAMER_INSPECTOR_SYSTEM` | `1` reports UIKit's own animations too |
 
 ## Android
 
@@ -63,4 +64,5 @@ Dart defines at build time:
 |---|---|
 | `--dart-define=KEYFRAMER_HOST=<ip>` | The relay's host |
 | `--dart-define=KEYFRAMER_PORT=<port>` | The relay's port |
-| `--dart-define=KEYFRAMER_INSPECTOR=true` | Connect in a release build too |
+| `--dart-define=KEYFRAMER_INSPECTOR=true` | On in any build, a release build too |
+| `--dart-define=KEYFRAMER_INSPECTOR=false` | Off in any build: no connection, and no call sites captured |

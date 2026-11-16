@@ -1,6 +1,8 @@
 package dev.keyframer.inspector
 
+import android.app.Activity
 import dev.keyframer.inspector.core.InspectorSession
+import dev.keyframer.inspector.core.OwnTime
 import dev.keyframer.inspector.core.TimeClock
 
 /**
@@ -31,6 +33,24 @@ object KeyframerExtensions {
     /** The app's own animation helpers, skipped when looking for a call site (KeyframerConfig.libraryPrefixes). */
     val libraryPrefixes: List<String> get() = Keyframer.libraryPrefixes
 
+    /** The inspector's own work on the main thread: an add-on's entry points time themselves with it. */
+    val ownTime: OwnTime get() = Keyframer.ownTimeOf
+
+    /**
+     * `taken`'s stack read off the main thread, made into what `read` makes of it there, then `then`
+     * with that on the main thread. For a call site nothing needs within the frame (see Stacks).
+     */
+    fun <T> readStack(taken: Throwable, read: (Array<StackTraceElement>) -> T, then: (T) -> Unit) = Stacks.read(taken, read, then)
+
     /** Which UI framework the hello names (call it from an add-on's install, before the session connects). */
     fun setFramework(name: String) = Keyframer.setFramework(name)
+
+    /**
+     * A screen declared while it is composed (KfScreen), in `owner` (its activity; null: the one on top),
+     * on top of the ones declared before it. The same `token` again renames it in place.
+     */
+    fun declareScreen(token: Any, name: String, owner: Activity?) = Keyframer.declareScreen(token, name, owner)
+
+    /** The screen `token` declared left the composition: the one under it names the screen again. */
+    fun undeclareScreen(token: Any) = Keyframer.undeclareScreen(token)
 }

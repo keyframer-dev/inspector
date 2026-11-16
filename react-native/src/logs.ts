@@ -5,6 +5,8 @@
  * in for tests.
  */
 
+import { enterInspector, leaveInspector } from './ownTime'
+
 export type LogReport = { level: 'warn' | 'error'; message: string; stack?: string }
 
 type Console = Record<'warn' | 'error', (...a: unknown[]) => void>
@@ -32,8 +34,14 @@ function install(con: Console, eu: ErrorUtilsLike | undefined): () => void {
   for (const level of ['warn', 'error'] as const) {
     const original = con[level]
     const wrapped = (...args: unknown[]) => {
-      const err = args.find((a): a is Error => a instanceof Error)
-      emit({ level, message: args.map(describe).join(' ').slice(0, 2000), ...(err?.stack ? { stack: err.stack.slice(0, 4000) } : {}) })
+      // Reading the arguments is the inspector's own work (ownTime.ts); the console it passes them to is not.
+      enterInspector()
+      try {
+        const err = args.find((a): a is Error => a instanceof Error)
+        emit({ level, message: args.map(describe).join(' ').slice(0, 2000), ...(err?.stack ? { stack: err.stack.slice(0, 4000) } : {}) })
+      } finally {
+        leaveInspector()
+      }
       original.apply(con, args)
     }
     con[level] = wrapped
@@ -44,8 +52,13 @@ function install(con: Console, eu: ErrorUtilsLike | undefined): () => void {
   if (eu) {
     const previous = eu.getGlobalHandler()
     const handler = (e: unknown, fatal?: boolean) => {
-      const err = e instanceof Error ? e : new Error(String(e))
-      emit({ level: 'error', message: `${fatal ? 'Fatal: ' : ''}${err.message}`, ...(err.stack ? { stack: err.stack.slice(0, 4000) } : {}) })
+      enterInspector()
+      try {
+        const err = e instanceof Error ? e : new Error(String(e))
+        emit({ level: 'error', message: `${fatal ? 'Fatal: ' : ''}${err.message}`, ...(err.stack ? { stack: err.stack.slice(0, 4000) } : {}) })
+      } finally {
+        leaveInspector()
+      }
       previous(e, fatal)
     }
     eu.setGlobalHandler(handler)

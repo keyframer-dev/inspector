@@ -10,6 +10,9 @@ import kotlin.math.roundToLong
  * what most frames of the last window took, snapped to 60/90/120 Hz, so a jittery loop does not read as
  * a faster display. With one ([setRefreshRate]), frames are counted against it: a run of slow frames on
  * a 120 Hz display is a run of drops, not a 60 Hz display.
+ *
+ * A long frame says how much of it was the inspector's own work on the thread ([OwnTime]): what the
+ * running total grew by since the frame before, when it was 0.5 ms or more.
  */
 class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
     private var interval = 1000.0 / 60
@@ -20,6 +23,8 @@ class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
     private var dropped = 0
     private var fast = 0
     private var mid = 0
+    /** The inspector's running total of work ([OwnTime.totalMs]) at the last frame. */
+    private var inspector = 0.0
 
     val stats = ArrayList<FrameStat>()
     val drops = ArrayList<FrameDrop>()
@@ -39,21 +44,30 @@ class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
     /** The frame budget drops are counted against, in ms. */
     val frameMs: Double get() = interval
 
-    /** A frame was drawn at `t` ms (the recording's clock). */
-    fun tick(t: Double) {
+    /**
+     * A frame was drawn at `t` ms (the recording's clock). `inspector`: how long the inspector has worked
+     * on this thread so far ([OwnTime.totalMs]); what it grew by since the last frame was the inspector's
+     * part of this one.
+     */
+    fun tick(t: Double, inspector: Double = 0.0) {
         val prev = last
         last = t
         if (prev < 0) {
             windowStart = t
+            this.inspector = inspector
             return
         }
         val dt = t - prev
         if (dt <= 0) return
+        // Never more than the frame took: the two are read from different clocks.
+        val own = minOf(inspector - this.inspector, dt)
+        this.inspector = inspector
         if (dt < 10.5) fast++ else if (dt < 13) mid++
         val lost = max(0, (dt / interval).roundToInt() - 1)
         if (lost > 0) {
             dropped += lost
-            drops.add(FrameDrop(t.roundToLong(), thread, (dt * 10).roundToLong() / 10.0, lost))
+            val ownMs = if (own >= MIN_INSPECTOR_MS) (own * 10).roundToLong() / 10.0 else null
+            drops.add(FrameDrop(t.roundToLong(), thread, (dt * 10).roundToLong() / 10.0, lost, ownMs))
         }
         frames++
         val span = t - windowStart
@@ -67,5 +81,10 @@ class FrameMeter(val thread: String, private val windowMs: Double = 250.0) {
             mid = 0
             windowStart = t
         }
+    }
+
+    companion object {
+        /** Less of the inspector's own work than this in a long frame is not said (ms). */
+        const val MIN_INSPECTOR_MS = 0.5
     }
 }

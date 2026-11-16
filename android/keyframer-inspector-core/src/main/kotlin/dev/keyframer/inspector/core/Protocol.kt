@@ -98,7 +98,7 @@ data class DeviceInfo(val name: String? = null, val model: String? = null, val i
 /** The SDK, as `hello` names it. */
 object Sdk {
     const val NAME = "keyframer-inspector"
-    const val VERSION = "0.2.0"
+    const val VERSION = "0.3.0"
     /** The protocol version this SDK speaks. */
     const val PROTOCOL = 1
 }
@@ -177,9 +177,12 @@ data class FrameStat(val t: Long, val thread: String, val fps: Int, val dropped:
     override fun toJson() = linkedMapOf("t" to t, "thread" to thread, "fps" to fps, "dropped" to dropped)
 }
 
-/** InspectorFrameDrop. */
-data class FrameDrop(val t: Long, val thread: String, val ms: Double, val dropped: Int) : JsonValue {
-    override fun toJson() = linkedMapOf("t" to t, "thread" to thread, "ms" to ms, "dropped" to dropped)
+/**
+ * InspectorFrameDrop. `inspectorMs`: how long the inspector itself worked on the thread during the frame
+ * (see OwnTime), when it was 0.5 ms or more.
+ */
+data class FrameDrop(val t: Long, val thread: String, val ms: Double, val dropped: Int, val inspectorMs: Double? = null) : JsonValue {
+    override fun toJson() = linkedMapOf<String, Any?>("t" to t, "thread" to thread, "ms" to ms, "dropped" to dropped, "inspectorMs" to inspectorMs)
 }
 
 /** InspectorRoute. */

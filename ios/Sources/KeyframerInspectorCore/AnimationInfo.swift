@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 import QuartzCore
 
@@ -94,7 +95,28 @@ public struct AnimationInfo: Sendable {
         case let p as CAPropertyAnimation: return p.keyPath ?? "?"
         case let g as CAAnimationGroup: return (g.animations ?? []).map(keyPath(of:)).joined(separator: "+")
         case is CATransition: return "transition"
-        default: return String(describing: type(of: anim))
+        default: return kind(of: anim)
+        }
+    }
+
+    /// An animation that moves no key path, named by what it does rather than by its class (which read
+    /// like a property where a key path goes): Core Animation's private `CAMatchMoveAnimation`, a layer
+    /// made to follow another one (iOS 26's glass under its buttons), is `matchMove`.
+    static func kind(of anim: CAAnimation) -> String {
+        var name = String(describing: type(of: anim))
+        if name.hasPrefix("CA") { name.removeFirst(2) }
+        if name.hasSuffix("Animation") { name.removeLast("Animation".count) }
+        guard let first = name.first else { return "animation" }
+        return first.lowercased() + name.dropFirst()
+    }
+
+    /// The key paths an animation changes, which can be read back from the layer and so become
+    /// signals: a property animation's, a group's children's. A transition or a match animation has none.
+    public static func propertyKeyPaths(of anim: CAAnimation) -> [String] {
+        switch anim {
+        case let p as CAPropertyAnimation: return p.keyPath.map { [$0] } ?? []
+        case let g as CAAnimationGroup: return (g.animations ?? []).flatMap(propertyKeyPaths(of:))
+        default: return []
         }
     }
 
@@ -168,3 +190,4 @@ public struct AnimationInfo: Sendable {
         return changed ? copy : nil
     }
 }
+#endif

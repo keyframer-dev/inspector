@@ -1,3 +1,4 @@
+import QuartzCore
 import XCTest
 @testable import KeyframerInspectorCore
 
@@ -114,5 +115,72 @@ final class CallStackTests: XCTestCase {
         for row in rows.dropFirst() {
             XCTAssertNotNil(v8.firstMatch(in: row, range: NSRange(row.startIndex..., in: row)), row)
         }
+    }
+    /// Resolving a call site looks up app frames only: a system image's symbol table is what made
+    /// `Thread.callStackSymbols` slow on the main thread.
+    func testResolvingLooksUpOnlyAppFrames() throws {
+        let resolver = CallSiteResolver(executable: "KeyframerExample")
+        let frames = SymbolFrame.parse(lines: lines)
+        var looked = Set<Int>()
+        let lazy = StackFrames(
+            count: frames.count,
+            isApp: { resolver.isAppFrame(frames[$0]) },
+            frame: { looked.insert($0); return frames[$0] },
+            imageOffset: { _ in nil }
+        )
+        let site = try XCTUnwrap(resolver.resolve(lazy))
+        XCTAssertEqual(site.name.display, "closure #1 in ViewController.bounce()")
+        XCTAssertTrue(looked.allSatisfy { resolver.isAppFrame(frames[$0]) }, "looked up \(looked.sorted())")
+        // The full description (off the main thread) reads them all, once, in one pass.
+        let described = resolver.describeStack(StackFrames(frames, resolver: resolver, imageOffset: { Int($0 & 0xFFFF) }))
+        XCTAssertEqual(described.stack, resolver.formatStack(frames))
+        XCTAssertEqual(described.frames, resolver.stackFrames(frames, imageOffset: { Int($0 & 0xFFFF) }))
+    }
+
+    /// A stack taken as return addresses, read back with dladdr: this function is the call site, and the
+    /// description is worked out once however many events share the stack.
+    func testCapturedStacksReadBackThroughDladdr() throws {
+        let stack = capturedHere()
+        let probe = StackSymbols(resolver: CallSiteResolver(executable: "-"))
+        let image = probe.frame(at: 0, address: try XCTUnwrap(stack.addresses.first)).image
+        XCTAssertNotEqual(image, "???")
+        let symbols = StackSymbols(resolver: CallSiteResolver(executable: image))
+        XCTAssertTrue(symbols.isApp(stack.addresses[0]))
+        XCTAssertFalse(symbols.isApp(UInt(bitPattern: dlsym(UnsafeMutableRawPointer(bitPattern: -2), "strlen"))))
+        let site = try XCTUnwrap(symbols.resolve(stack))
+        XCTAssertTrue(site.name.display.contains("capturedHere"), site.name.display)
+        let first = symbols.describe(stack)
+        XCTAssertTrue(first.stack.contains("capturedHere"))
+        XCTAssertNotNil(first.frames.first?.offset)
+        XCTAssertEqual(symbols.describe(stack), first)
+    }
+
+    @inline(never)
+    private func capturedHere() -> CapturedStack {
+        CapturedStack.capture()
+    }
+
+    /// What the main thread pays where an animation starts, on a deep stack (SwiftUI's run past a
+    /// hundred frames): return addresses plus the app frames' lookups (kept per address), against
+    /// `Thread.callStackSymbols`, which looks up every frame every time.
+    func testTakingAStackCostsFarLessThanSymbolicatingIt() throws {
+        let image = StackSymbols(resolver: CallSiteResolver(executable: "-")).frame(at: 0, address: try XCTUnwrap(capturedHere().addresses.first)).image
+        let symbols = StackSymbols(resolver: CallSiteResolver(executable: image))
+        let (old, new) = deep(120) { () -> (Double, Double) in
+            _ = symbols.resolve(CapturedStack.capture())
+            let t0 = CACurrentMediaTime()
+            for _ in 0..<20 { _ = Thread.callStackSymbols }
+            let old = (CACurrentMediaTime() - t0) / 20 * 1000
+            let t1 = CACurrentMediaTime()
+            for _ in 0..<20 { _ = symbols.resolve(CapturedStack.capture()) }
+            return (old, (CACurrentMediaTime() - t1) / 20 * 1000)
+        }
+        print(String(format: "callStackSymbols %.3f ms, capture + resolve %.3f ms", old, new))
+        XCTAssertLessThan(new * 5, old)
+    }
+
+    @inline(never)
+    private func deep<T>(_ n: Int, _ body: () -> T) -> T {
+        n == 0 ? body() : deep(n - 1, body)
     }
 }

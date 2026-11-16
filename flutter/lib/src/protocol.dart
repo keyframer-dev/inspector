@@ -10,7 +10,7 @@ const String kfRasterThread = 'ui';
 /// The protocol version this SDK speaks, and the SDK itself (keep in step with pubspec.yaml).
 const int kfProtocolVersion = 1;
 const String kfSdkName = 'keyframer_inspector';
-const String kfSdkVersion = '0.2.0';
+const String kfSdkVersion = '0.3.0';
 
 /// What the two threads are called here (`InspectorThreads`): animations tick on the UI isolate.
 const Map<String, Object?> kfThreads = {
@@ -230,16 +230,26 @@ class KfFrameStat {
 
 /// One long frame (`InspectorFrameDrop`).
 class KfFrameDrop {
-  const KfFrameDrop({required this.t, required this.thread, required this.ms, required this.dropped});
+  const KfFrameDrop({required this.t, required this.thread, required this.ms, required this.dropped, this.inspectorMs});
 
   final num t;
   final String thread;
   final num ms;
   final int dropped;
 
-  KfFrameDrop at(num t) => KfFrameDrop(t: t, thread: thread, ms: ms, dropped: dropped);
+  /// How long the inspector itself worked on that thread during the frame, when 0.5 ms or more: a drop
+  /// that would not have been one without it is the inspector's, not the app's.
+  final num? inspectorMs;
 
-  Map<String, Object?> toJson() => {'t': t, 'thread': thread, 'ms': ms, 'dropped': dropped};
+  KfFrameDrop at(num t) => KfFrameDrop(t: t, thread: thread, ms: ms, dropped: dropped, inspectorMs: inspectorMs);
+
+  Map<String, Object?> toJson() => {
+    't': t,
+    'thread': thread,
+    'ms': ms,
+    'dropped': dropped,
+    if (inspectorMs != null) 'inspectorMs': inspectorMs,
+  };
 }
 
 /// A screen the app was on (`InspectorRoute`).

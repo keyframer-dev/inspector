@@ -4,19 +4,17 @@ import 'package:flutter/widgets.dart';
 import 'client.dart';
 import 'controller.dart';
 import 'flutter_host.dart';
+import 'navigation.dart';
 import 'runtime.dart';
 import 'transport.dart';
 import 'widget_site.dart';
-
-/// On in debug and profile builds. A release build connects only when built with
-/// `--dart-define=KEYFRAMER_INSPECTOR=true` or when `enabled: true` is passed.
-bool get kfInspectorDefaultEnabled => !kReleaseMode || const bool.fromEnvironment('KEYFRAMER_INSPECTOR');
 
 /// Connects this app to the Keyframer relay (`ws://<host>:8790/app`) and returns what disconnects it.
 /// [KeyframerInspector] calls it for you; call it yourself to connect without the widget (no capture).
 ///
 /// `appPackage` is your pubspec `name`, so call sites read `lib/main.dart:42` instead of
-/// `package:my_app/main.dart:42`.
+/// `package:my_app/main.dart:42`. `enabled` defaults to [kfInspectorDefaultEnabled]: on in debug and
+/// profile builds unless built with `--dart-define=KEYFRAMER_INSPECTOR=false`.
 KfInspectorConnection connectKeyframerInspector({
   required String app,
   String? appPackage,
@@ -27,7 +25,11 @@ KfInspectorConnection connectKeyframerInspector({
   GlobalKey? captureBoundary,
   KfConnector? connector,
 }) {
-  if (!(enabled ?? kfInspectorDefaultEnabled)) return const KfInspectorConnection._(null);
+  if (!(enabled ?? kfInspectorDefaultEnabled)) {
+    // Off: values made from here on take no stack trace either.
+    kfCaptureSites = false;
+    return const KfInspectorConnection._(null);
+  }
   // A release build that opted in reports call sites too (as far as its stacks allow).
   kfCaptureSites = true;
   final rt = KfRuntime.instance;
@@ -74,7 +76,8 @@ class KfInspectorConnection {
 /// ```dart
 /// runApp(KeyframerInspector(app: 'My app', appPackage: 'my_app', child: MyApp()));
 /// ```
-/// and add `navigatorObservers: [kfNavigatorObserver]` to your MaterialApp.
+/// and add `navigatorObservers: [kfNavigatorObserver]` to your MaterialApp. [KeyframerScreen] names
+/// screens the navigator cannot (pages without a name, tabs).
 class KeyframerInspector extends StatefulWidget {
   const KeyframerInspector({
     super.key,
@@ -96,7 +99,15 @@ class KeyframerInspector extends StatefulWidget {
   /// 10.0.2.2 on Android, then 127.0.0.1.
   final String? host;
   final int? port;
+
+  /// Whether it connects: [kfInspectorDefaultEnabled] when null. Pass your own flag to start it only
+  /// when asked.
   final bool? enabled;
+
+  /// The screen the app is on now, from code (a custom router, a pager that changed page): the screen
+  /// in `navigation` markers until the next change the navigator observer or a [KeyframerScreen] makes.
+  /// [KeyframerScreen] is the declarative way.
+  static void setScreen(String name) => kfSetScreen(KfRuntime.instance, name);
 
   @override
   State<KeyframerInspector> createState() => _KeyframerInspectorState();

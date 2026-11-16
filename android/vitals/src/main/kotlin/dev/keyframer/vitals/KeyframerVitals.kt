@@ -18,15 +18,13 @@ import dev.keyframer.vitals.internal.AndroidHooks
 import dev.keyframer.vitals.internal.AndroidProbe
 import dev.keyframer.vitals.internal.AppInfo
 import dev.keyframer.vitals.internal.HttpTransport
+import dev.keyframer.vitals.internal.LazySite
 import dev.keyframer.vitals.internal.MainScheduler
 import dev.keyframer.vitals.internal.Recorder
-import dev.keyframer.vitals.internal.Redact
 import dev.keyframer.vitals.internal.Reporter
 import dev.keyframer.vitals.internal.ReporterOptions
 import dev.keyframer.vitals.internal.RetryStore
 import dev.keyframer.vitals.internal.SharedPrefsKeyValue
-import dev.keyframer.vitals.internal.SiteInfo
-import dev.keyframer.vitals.internal.StackSites
 import dev.keyframer.vitals.internal.VitalsProtocol
 import java.io.File
 import java.util.concurrent.Executors
@@ -157,14 +155,17 @@ object KeyframerVitals {
     /**
      * Tracks an animator: each run is a motion window, and the frames drawn during it count against
      * its call site (`name`, or where this was called). Same as `animator.kfTrack(name)`.
+     *
+     * Where it was called is read from the stack only when a run starts in a session that measures, once
+     * per animator: most sessions are not sampled, and an app that makes an animator per tap would pay for
+     * a stack at every tap. The stack is recorded here (`Throwable()`, a fraction of reading it), and not
+     * at all for a named animator in a build without class names, whose name is its whole site.
      */
     @JvmStatic
     @JvmOverloads
     fun <T : Animator> track(animator: T, name: String? = null): T {
-        val stack = Throwable().stackTrace
-        val site = StackSites.site(stack, name?.let { Redact.maskText(it) }, fnOf(animator), (animator as? ObjectAnimator)?.propertyName, keepTypes) ?: return animator
         if (animator.listeners?.any { it is VitalsListener } == true) return animator
-        animator.addListener(VitalsListener(site))
+        animator.addListener(VitalsListener(LazySite.of(name, fnOf(animator), (animator as? ObjectAnimator)?.propertyName)))
         return animator
     }
 
@@ -184,12 +185,14 @@ object KeyframerVitals {
         else -> a.javaClass.simpleName.ifEmpty { "Animator" }
     }
 
-    private class VitalsListener(val site: SiteInfo) : AnimatorListenerAdapter() {
+    private class VitalsListener(val site: LazySite) : AnimatorListenerAdapter() {
         private var run: Recorder.Run? = null
 
         override fun onAnimationStart(animation: Animator) {
             finish()
-            run = reporter?.animationStart(site, estimateMs(animation))
+            val r = reporter ?: return
+            if (!r.measuring) return
+            run = r.animationStart(site.get() ?: return, estimateMs(animation))
         }
 
         override fun onAnimationEnd(animation: Animator) = finish()

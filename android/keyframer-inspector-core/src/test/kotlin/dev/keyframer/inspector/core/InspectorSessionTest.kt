@@ -20,7 +20,7 @@ class InspectorSessionTest {
         p = TestPlatform()
         sockets = FakeSockets()
         host = FakeHost(p)
-        session = InspectorSession("ws://relay/app?name=Example&platform=android", sockets, p, p, host)
+        session = InspectorSession("ws://relay/app?name=Example&platform=android", sockets, p, p, host, libraryPrefixes = listOf("com.acme.motion."))
         session.start()
     }
 
@@ -176,6 +176,49 @@ class InspectorSessionTest {
         val anim = sentOf("events").flatMap { it["events"] as List<Map<String, Any?>> }.single { it["kind"] == "anim" }
         assertEquals(120.0, anim["t"])
         assertEquals("dev.keyframer.example.MainActivity.onCreate", (anim["frames"] as List<Map<String, Any?>>).single()["methodName"])
+    }
+
+    @Test
+    fun `the stack is taken only while recording, once, with the app's helpers collapsed in its frames`() {
+        open()
+        var taken = 0
+        // A start inside the app's own helper, called from the screen.
+        val stack = arrayOf(
+            StackTraceElement("dev.keyframer.inspector.AnimatorTracker", "onAnimationStart", "Animators.kt", 205),
+            StackTraceElement("com.acme.motion.Fade", "run", "Fade.kt", 9),
+            StackTraceElement("com.acme.Home", "show", "Home.kt", 30),
+        )
+        session.reportAnim(site, emptyList(), 300) { taken++; stack }
+        assertEquals(0, taken)
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        session.reportAnim(site, emptyList(), 300) { taken++; stack }
+        assertEquals(1, taken)
+        p.advance(100.0)
+        val anims = sentOf("events").flatMap { it["events"] as List<Map<String, Any?>> }.filter { it["kind"] == "anim" }
+        assertFalse("frames" in anims[0])
+        val frames = anims[1]["frames"] as List<Map<String, Any?>>
+        assertEquals(listOf("com.acme.motion.Fade.run", "com.acme.Home.show"), frames.map { it["methodName"] })
+        assertEquals(listOf(true, null), frames.map { it["collapse"] })
+    }
+
+    @Test
+    fun `a value is sampled while it is recorded and reads as a number`() {
+        session.addSignal(ValueSignal("x", 1.0))
+        session.addSignal(ValueSignal("color", null))
+        session.addSignal(ValueSignal("nan", Double.NaN))
+        session.addSignal(ValueSignal("other", 2.0))
+        open()
+        assertFalse(session.sampled("x"))
+        receive("""{"type":"record","signalIds":["x","color","nan"],"on":true}""")
+        assertTrue(session.sampled("x"))
+        // Never a number (an animator of objects), or not a finite one: no samples.
+        assertFalse(session.sampled("color"))
+        assertFalse(session.sampled("nan"))
+        // Not recorded, or not there.
+        assertFalse(session.sampled("other"))
+        assertFalse(session.sampled("gone"))
+        receive("""{"type":"record","signalIds":["x"],"on":false}""")
+        assertFalse(session.sampled("x"))
     }
 
     @Test
@@ -551,5 +594,38 @@ class InspectorSessionTest {
         receive("""{"type":"presence","app":true,"editors":1,"cli":false}""")
         val catalog = sentOf("events").last()["events"] as List<Map<String, Any?>>
         assertTrue(catalog.none { "t" in it })
+    }
+
+    @Test
+    fun `a long frame says how much of it was the inspector's own work, and app code it runs is not`() {
+        session.dispose()
+        // The inspector's clock: the platform's, plus the work the test says sections did.
+        var worked = 0L
+        val own = OwnTime { (p.now * 1e6).toLong() + worked }
+        session = InspectorSession("ws://relay/app?name=Example&platform=android", sockets, p, p, host, ownTime = own)
+        session.registerScenario("tap") { done ->
+            // The app's own 30 ms: a scenario is the app's code, run on request.
+            worked += 30_000_000
+            done(null)
+        }
+        session.start()
+        open()
+        receive("""{"type":"record","signalIds":["*"],"on":true}""")
+        p.advance(100.0)
+        // An animator's listener in the platform layer: 4 ms of the inspector's work, a stack inside it.
+        own.time {
+            worked += 3_000_000
+            own.time { worked += 1_000_000 }
+        }
+        receive("""{"type":"scenario","name":"tap"}""")
+        // One long frame after it.
+        p.advance(50.0, frameMs = 50.0)
+        session.flush()
+        val drops = sentOf("samples").flatMap { (it["drops"] as? List<Map<String, Any?>>).orEmpty() }
+        assertEquals(listOf(4.0), drops.map { it["inspectorMs"] })
+        // The frames before it were short: no drops, and work done while not recording is not counted.
+        receive("""{"type":"record","signalIds":["*"],"on":false}""")
+        own.time { worked += 5_000_000 }
+        assertEquals(4.0, own.totalMs)
     }
 }

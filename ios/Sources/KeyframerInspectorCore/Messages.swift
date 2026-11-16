@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 public struct InspectorScreen: Codable, Hashable, Sendable {
@@ -314,3 +315,4 @@ public enum InspectorJSON {
         try JSONDecoder().decode(InspectorMessage.self, from: Data(text.utf8))
     }
 }
+#endif

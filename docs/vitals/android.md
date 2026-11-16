@@ -23,12 +23,12 @@ plugins {
 }
 
 dependencies {
-  implementation("dev.keyframer:vitals:0.1.0")
-  implementation("dev.keyframer:vitals-compose:0.1.0")   // Compose apps
+  implementation("dev.keyframer:vitals:0.1.1")
+  implementation("dev.keyframer:vitals-compose:0.1.1")   // Compose apps
 
   // The inspector stays development only, as before
-  debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
-  releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")
+  debugImplementation("dev.keyframer:keyframer-inspector:0.3.0")
+  releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.3.0")
 }
 ```
 

@@ -17,15 +17,15 @@ Views:
 
 ```kotlin
 // build.gradle.kts
-debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")   // same API, does nothing, no OkHttp
+debugImplementation("dev.keyframer:keyframer-inspector:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.3.0")   // same API, does nothing, no OkHttp
 ```
 
 Compose (these replace the two lines above; each brings its base module):
 
 ```kotlin
-debugImplementation("dev.keyframer:keyframer-inspector-compose:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.2.0")
+debugImplementation("dev.keyframer:keyframer-inspector-compose:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.3.0")
 ```
 
 ## 2. Start it
@@ -37,11 +37,30 @@ Keyframer.start(this)   // debuggable builds only, unless enableInRelease
 
 The relay is plain `ws://`, so allow cleartext to that host only, with a `network_security_config.xml` like the example app's.
 
+### Start it only when asked
+
+The inspector costs something while it runs (a connection, a stack at each tracked call site, frame callbacks and samples while recording), and a debug build is what people install on their own phone. Start it behind a flag, so a debug build connects only when you build it to: a Gradle property into BuildConfig, the way the example app passes its relay host.
+
+```kotlin
+// build.gradle.kts
+android {
+    defaultConfig {
+        // ./gradlew installDebug -Pkeyframer=true
+        buildConfigField("boolean", "KEYFRAMER", "${findProperty("keyframer") == "true"}")
+    }
+    buildFeatures { buildConfig = true }
+}
+
+// Application.onCreate
+if (BuildConfig.KEYFRAMER) Keyframer.start(this)
+```
+
 ## 3. Reach the relay
 
 - On the emulator it connects to `ws://10.0.2.2:8790` by itself.
-- On a device, run `adb reverse tcp:8790 tcp:8790` (it uses 127.0.0.1 there), or build with `-Pkeyframer.host=<LAN IP>` and add that IP to `network_security_config.xml`.
-- `-Pkeyframer.port=<port>` moves it off 8790.
+- On a device, run `adb reverse tcp:8790 tcp:8790` (it uses 127.0.0.1 there), or pass your computer's LAN IP as `KeyframerConfig(host = ...)` and add that IP to `network_security_config.xml`.
+- `KeyframerConfig(port = ...)` moves it off 8790.
+- The example app builds these from `-Pkeyframer.host=<LAN IP>` and `-Pkeyframer.port=<port>`. That is its own wiring (Gradle properties into BuildConfig): the library reads no Gradle property.
 
 ```sh
 adb reverse tcp:8790 tcp:8790
@@ -64,13 +83,16 @@ ValueAnimator.ofFloat(1f, 1.3f).apply { addUpdateListener { /* ... */ } }.kfTrac
 // Anything else that moves: a drag, a scroll offset, a progress
 Keyframer.signal("cardX", card, read = { card.translationX }, write = { card.translationX = it })
 
-// Screens that are not activities (fragments, Navigation)
+// Screens that are not activities (fragments, Navigation). The name stays with the activity on top:
+// it comes back with it from the background or from behind a dialog.
 navController.addOnDestinationChangedListener { _, d, _ -> Keyframer.setRoute(d.route ?: d.label.toString()) }
 Keyframer.setNavigator { route, _ -> navController.navigate(route); true }
 
 // Something an agent can run to reproduce a problem
 Keyframer.registerScenario("drag card") { done -> runTheDrag(); done(null) }
 ```
+
+A helper of your own that wraps `kfTrack` or `kfAnimate*AsState` makes every value it animates the helper's own line. Put its package in `KeyframerConfig(libraryPrefixes = listOf("com.acme.motion."))`: the call site is then the line that called the helper.
 
 ### Compose
 
@@ -85,9 +107,18 @@ val x = rememberKfAnimatable(0f, label = "ballX")
 scope.launch { x.kfAnimateTo(0f, spring(dampingRatio = 0.35f)) }
 ```
 
+Name your screens, so navigation markers say more than the activity's name:
+
+```kotlin
+KfScreen("Settings")          // at the top of a screen's content, while it is composed
+KfNavigation(navController)   // once, next to the NavHost: each destination by its route pattern
+```
+
+The most recently composed `KfScreen` still composed is the screen. When it leaves, the one under it is the screen again (the `KfScreen` before it, else what `Keyframer.setRoute` set, else the activity). A new name renames it in place, and one screen replacing another in the same frame is one marker.
+
 `Keyframer.start` finds the module by itself. The hello then says `framework: "compose"`, and every Compose window runs on the inspector's animation time, so slow motion, pause and step reach every Compose animation, tracked or not.
 
-In release builds the no-op module's functions are Compose's own calls (`kfAnimateFloatAsState` is `animateFloatAsState`).
+In release builds the no-op module's functions are Compose's own calls (`kfAnimateFloatAsState` is `animateFloatAsState`), and `KfScreen` and `KfNavigation` do nothing.
 
 ## Check that it works
 

@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import UIKit
 
@@ -30,22 +30,23 @@ import UIKit
     private static let maxQueuedEvents = 2000
     private static let maxSamplesPerMessage = 3000
     private static let maxRecordedAnimations = 400
-    static let sdkVersion = "0.2.0"
+    static let sdkVersion = "0.3.0"
 
     let config: KeyframerInspector.Configuration
-    private let resolver: CallSiteResolver
+    private let symbols: StackSymbols
     private let connection: Connection
+    private let outbox: Outbox
     private let signals = SignalRegistry()
     private let pins = PinBoard()
     private let scrubber = Scrubber()
     private let ticker = Ticker()
     private let clocks = WindowClocks()
     private let watch = LayerWatch()
+    private lazy var motion = LayerMotion(signals: signals)
 
     private var overrides: InspectorOverrides = [:]
     private var nextEid = 1
     private var editors = 0
-    private var symbolNames: [String: SymbolName] = [:]
 
     // What the last hello said, so a recording can say what changed since.
     private var helloDisplay: InspectorDisplay?
@@ -57,7 +58,7 @@ import UIKit
     private var markedReduceMotion = false
 
     // Outgoing, flushed every 100 ms.
-    private var queue: [InspectorEvent] = []
+    private var queue: [Outgoing] = []
     private var samples: [InspectorSample] = []
     private var frames: [InspectorFrameStat] = []
     private var drops: [InspectorFrameDrop] = []
@@ -107,8 +108,10 @@ import UIKit
         self.config = config
         self.callerFile = callerFile
         let exe = Bundle.main.executableURL?.lastPathComponent ?? (Bundle.main.infoDictionary?["CFBundleExecutable"] as? String) ?? ""
-        resolver = CallSiteResolver(executable: exe, extraImages: config.appModules)
-        connection = Connection(url: config.url)
+        symbols = StackSymbols(resolver: CallSiteResolver(executable: exe, extraImages: config.appModules))
+        let connection = Connection(url: config.url)
+        self.connection = connection
+        outbox = Outbox(symbols: symbols) { [weak connection] text in connection?.send(text) }
         ticker.onFrame = { [weak self] link in self?.frame(link) }
     }
 
@@ -126,14 +129,17 @@ import UIKit
             self?.restoreTime()
         }
         connection.connect()
+        symbols.prepare()
         readSources()
         var ticks = 0
         flushTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
-                ticks += 1
-                if ticks % 3 == 0 { self?.checkSoon() }
-                if ticks % 10 == 0 { self?.checkOnceASecond() }
-                self?.flush()
+                OwnTime.measure {
+                    ticks += 1
+                    if ticks % 3 == 0 { self?.checkSoon() }
+                    if ticks % 10 == 0 { self?.checkOnceASecond() }
+                    self?.flush()
+                }
             }
         }
         RunLoop.main.add(flushTimer!, forMode: .common)
@@ -163,16 +169,15 @@ import UIKit
             Self.log("native call sites have no file and line: \(SourceIndex.Unavailable.noRoot.reason)")
             return
         }
-        Task.detached(priority: .utility) { [weak self] in
-            let built = SourceIndex.build(root: root)
-            await MainActor.run {
-                switch built {
-                case .success(let index):
-                    self?.sources = index
-                    self?.sourcesBase = configured == nil ? root : nil
-                case .failure(let why):
-                    Self.log("native call sites have no file and line: \(why.reason)")
-                }
+        // Read on a background task, kept on the main actor (where `self` is only ever touched).
+        Task { @MainActor [weak self] in
+            let built = await Task.detached(priority: .utility) { SourceIndex.build(root: root) }.value
+            switch built {
+            case .success(let index):
+                self?.sources = index
+                self?.sourcesBase = configured == nil ? root : nil
+            case .failure(let why):
+                Self.log("native call sites have no file and line: \(why.reason)")
             }
         }
     }
@@ -207,9 +212,9 @@ import UIKit
         flush()
     }
 
+    /// Through the outbox: encoded off the main thread, sent in the order posted.
     private func send(_ message: InspectorMessage) {
-        guard let text = try? InspectorJSON.encode(message) else { return }
-        connection.send(text)
+        outbox.post(message)
     }
 
     private func sendHello() {
@@ -291,14 +296,19 @@ import UIKit
     }
 
     private func enqueue(_ event: InspectorEvent) {
-        queue.append(event)
+        enqueue(Outgoing(event: event))
+    }
+
+    private func enqueue(_ outgoing: Outgoing) {
+        queue.append(outgoing)
         if queue.count > Self.maxQueuedEvents { queue.removeFirst(queue.count - Self.maxQueuedEvents) }
     }
 
     private func flush() {
         guard connection.isOpen else { return }
         if !queue.isEmpty {
-            send(.events(queue))
+            // Stacks are read on the way out, off the main thread.
+            outbox.post(events: queue)
             queue = []
         }
         guard !samples.isEmpty || !frames.isEmpty || !drops.isEmpty || !markers.isEmpty else { return }
@@ -319,13 +329,17 @@ import UIKit
     // MARK: Messages from editors
 
     private func receive(_ text: String) {
+        OwnTime.measure { handle(text) }
+    }
+
+    private func handle(_ text: String) {
         guard text != "pong", let message = try? InspectorJSON.decode(text) else { return }
         switch message {
         case .overrides(let o):
             overrides = o
         case .replay:
             releasePlayback()
-            Registry.replay?.1()
+            OwnTime.notOurs { Registry.replay?.1() }
         case .record(let ids, let on, let recorder):
             setRecording(ids, on: on, recorder: recorder)
         case .scenario(let name):
@@ -423,6 +437,8 @@ import UIKit
             meter = FrameMeter(thread: .js, hz: Self.meterHz(display: hz))
             // The recording starts now: a stall before the first display frame is measured too.
             meter?.start(at: 0)
+            // What the inspector did before the recording started is not in its first frame.
+            _ = OwnTime.take()
             ticker.hz = hz
             lastTouchMove = [:]
             lastRoute = nil
@@ -460,6 +476,7 @@ import UIKit
             })
         } else {
             meter = nil
+            motion.end()
             samples.append(contentsOf: compressor.finish())
             for o in observers { NotificationCenter.default.removeObserver(o) }
             observers = []
@@ -492,10 +509,10 @@ import UIKit
         markers.append(marker)
     }
 
-    private func mark(route: String, params: [String: JSONValue]?) {
+    private func mark(route: String, params: [String: JSONValue]?, at t: Double? = nil) {
         guard route != lastRoute else { return }
         lastRoute = route
-        mark(.navigation(.init(t: elapsed(), route: route, params: params)))
+        mark(.navigation(.init(t: t ?? elapsed(), route: route, params: params)))
     }
 
     private func updateTicker() {
@@ -503,18 +520,28 @@ import UIKit
     }
 
     /// One display frame: frame stats and samples while recording, the next samples while playing back.
+    /// The inspector's own time since the last frame goes with a long one; this frame's sampling
+    /// counts toward the next.
     private func frame(_ link: CADisplayLink) {
-        if isRecording, var m = meter {
-            let t = (link.timestamp - recordStart) * 1000
-            m.tick(t)
-            let (stats, long) = m.drain()
-            meter = m
-            frames += stats.map { var s = $0; s.t = s.t.rounded(); return s }
-            drops += long.map { var d = $0; d.t = d.t.rounded(); return d }
-            sample(at: t.rounded())
+        // After a stall the display link first calls back late, with the timestamp of the frame before
+        // it: the stall shows as a long frame on the tick after this one, so what the inspector did
+        // in it waits for that tick.
+        let lateMs = (CACurrentMediaTime() - link.timestamp) * 1000
+        let own = lateMs > (meter?.interval ?? 1000 / 60) * 1.5 ? 0 : OwnTime.take()
+        OwnTime.measure {
+            if isRecording, var m = meter {
+                let t = (link.timestamp - recordStart) * 1000
+                m.tick(t, inspectorMs: own)
+                let (stats, long) = m.drain()
+                meter = m
+                frames += stats.map { var s = $0; s.t = s.t.rounded(); return s }
+                drops += long.map { var d = $0; d.t = d.t.rounded(); return d }
+                sample(at: t.rounded())
+                if motion.isActive { moved(at: t.rounded()) }
+            }
+            if run != nil { step() }
+            updateTicker()
         }
-        if run != nil { step() }
-        updateTicker()
     }
 
     private func sample(at t: Double) {
@@ -525,16 +552,54 @@ import UIKit
         }
     }
 
+    // MARK: What a SwiftUI animation moved
+
+    /// A withKeyframerAnimation started while recording: what it moves on screen is watched until it
+    /// settles (LayerMotion), so it has a curve even when no traced value samples it.
+    func animationBegan(_ token: ObjectIdentifier, site: LayerMotion.Site) {
+        guard isRecording, let root = UIApplication.shared.kf_keyWindow?.layer else { return }
+        motion.begin(token, site: site, root: root, at: elapsed())
+    }
+
+    /// The first signal a withKeyframerAnimation moved, if any yet.
+    func movedSignal(of token: ObjectIdentifier) -> String? {
+        motion.movedSignal(of: token)
+    }
+
+    /// Layers that started moving this frame become signals of the call site that moved them, with
+    /// what they did since it started; the sampler carries on from the next frame.
+    private func moved(at t: Double) {
+        guard let root = UIApplication.shared.kf_keyWindow?.layer else { return motion.end() }
+        for found in motion.frame(root: root, at: t) {
+            for prop in found.props {
+                guard let site = signals.ensure(
+                    layer: found.layer, path: prop.path, naming: found.naming, file: found.site.file, line: found.site.line,
+                    column: found.site.column, prop: prop.kind
+                ) else { continue }
+                enqueue(.signal(site))
+                motion.didRegister(site.id, for: found.token, at: t)
+                if recordAll { recording.insert(site.id) }
+                guard recording.contains(site.id) else { continue }
+                for (at, values) in found.history {
+                    var v = values[prop]
+                    if LayerKeyPath.isAngle(prop.path) { v = angles.unwrap(site.id, v) }
+                    samples += compressor.push(id: site.id, t: at.rounded(), v: v)
+                }
+            }
+        }
+    }
+
     // MARK: Animations
 
-    /// Called synchronously from `-[CALayer addAnimation:forKey:]` on the main thread.
-    func willAdd(_ anim: CAAnimation, forKey key: String?, to layer: CALayer, symbols: [String], editable: Bool = true) -> CAAnimation? {
+    /// Called synchronously from `-[CALayer addAnimation:forKey:]` on the main thread, with the stack
+    /// taken there. Only the app's own frames are looked up here (to find the call site, cached per
+    /// address); the rest of the stack is read on the way out, off the main thread.
+    func willAdd(_ anim: CAAnimation, forKey key: String?, to layer: CALayer, stack: CapturedStack, editable: Bool = true) -> CAAnimation? {
         let now = CACurrentMediaTime()
         let explicit = ExplicitSites.current
         let keyPath = AnimationInfo.keyPath(of: anim)
         if AnimationInfo.privateKeyPaths.contains(keyPath) { return nil }
-        let frames = SymbolFrame.parse(lines: symbols)
-        let resolved = resolver.resolve(frames, describe: describe)
+        let resolved = symbols.resolve(stack)
         guard explicit != nil || resolved != nil || config.reportSystemAnimations else { return nil }
 
         let naming = signals.naming(for: layer)
@@ -558,7 +623,7 @@ import UIKit
             location = r.id
         } else {
             (file, line, column) = ("<system>", 0, 0)
-            location = naming.id("")
+            location = naming.base
         }
         let siteId = "\(location)/\(keyPath)"
 
@@ -570,10 +635,17 @@ import UIKit
         let model = property.flatMap { layer.value(forKeyPath: $0) }
         let presented = property.flatMap { (layer.presentation() ?? layer).value(forKeyPath: $0) }
         let begin = Self.begin(of: effective, on: layer, now: now)
-        let info = AnimationInfo(effective, delayMs: max(0, begin.delay * 1000), from: presented, to: model)
+        var info = AnimationInfo(effective, delayMs: max(0, begin.delay * 1000), from: presented, to: model)
+        // A layer made to follow another (CAMatchMoveAnimation, under iOS 26's glass): which one.
+        if property == nil, let source = anim.value(forKey: "sourceLayer") as? CALayer, case .object(var config)? = info.args.last {
+            let n = signals.naming(for: source)
+            config["follows"] = .string(n.base)
+            info.args[info.args.count - 1] = .object(config)
+        }
         let site = InspectorCallSite(
             id: siteId, file: file, line: line, column: column,
-            fn: Self.api(of: anim, frames: frames),
+            // The UIKit API that started it is read off the stack on the way out.
+            fn: String(describing: type(of: anim)),
             component: resolved?.name.type ?? naming.owner,
             target: explicit?.name ?? naming.name,
             prop: keyPath,
@@ -581,14 +653,11 @@ import UIKit
         )
         var event = InspectorAnimEvent(eid: nextEid, site: site, at: (Date().timeIntervalSince1970 * 1000).rounded(), args: info.args, thread: .js, durationMs: info.durationMs)
         nextEid += 1
-        if isRecording {
-            event.t = elapsed(now)
-            event.stack = resolver.formatStack(frames, describe: describe)
-            event.frames = resolver.stackFrames(frames, describe: describe)
-        }
-        enqueue(.anim(event))
+        if isRecording { event.t = elapsed(now) }
+        enqueue(Outgoing(event: .anim(event), stack: stack, withFrames: isRecording, apiFromStack: true))
 
-        let paths = (effective as? CAAnimationGroup)?.animations?.map(AnimationInfo.keyPath(of:)) ?? [keyPath]
+        // Only key paths become signals: a transition or a match animation has nothing to sample.
+        let paths = AnimationInfo.propertyKeyPaths(of: effective)
         track(layer: layer, keyPaths: paths, naming: naming, file: file, line: line)
         remember(effective, on: layer, begin: begin.local, from: presented, to: model)
         if isRecording { checkVisibility(of: layer, now: now, adding: true) }
@@ -614,20 +683,14 @@ import UIKit
         overrides[siteId]
     }
 
-    /// An animation reported from outside Core Animation (a SwiftUI trace), with its call site.
-    func report(site: InspectorCallSite, args: [JSONValue], durationMs: Double?, symbols: [String]?) {
+    /// An animation reported from outside Core Animation (a SwiftUI trace), with its call site and,
+    /// while recording, the stack it was started from (read on the way out, once per stack).
+    func report(site: InspectorCallSite, args: [JSONValue], durationMs: Double?, stack: CapturedStack?) {
         let now = CACurrentMediaTime()
         var event = InspectorAnimEvent(eid: nextEid, site: site, at: (Date().timeIntervalSince1970 * 1000).rounded(), args: args, thread: .js, durationMs: durationMs)
         nextEid += 1
-        if isRecording {
-            event.t = elapsed(now)
-            if let symbols {
-                let frames = SymbolFrame.parse(lines: symbols)
-                event.stack = resolver.formatStack(frames, describe: describe)
-                event.frames = resolver.stackFrames(frames, describe: describe)
-            }
-        }
-        enqueue(.anim(event))
+        if isRecording { event.t = elapsed(now) }
+        enqueue(Outgoing(event: .anim(event), stack: isRecording ? stack : nil, withFrames: isRecording))
     }
 
     func track(layer: CALayer, keyPaths: [String], file: String, line: Int) {
@@ -687,32 +750,14 @@ import UIKit
         return (local, 0)
     }
 
-    private func describe(_ symbol: String) -> SymbolName {
-        if let cached = symbolNames[symbol] { return cached }
-        let name = SymbolName.describe(symbol)
-        if symbolNames.count > 5000 { symbolNames = [:] }
-        symbolNames[symbol] = name
-        return name
-    }
-
-    /// The API that started it, from UIKit's frames on the stack, else the animation's class.
-    static func api(of anim: CAAnimation, frames: [SymbolFrame]) -> String {
-        for f in frames.prefix(24) where f.image == "UIKitCore" || f.image == "UIKit" {
-            let s = f.symbol
-            if s.contains("UIViewPropertyAnimator") { return "UIViewPropertyAnimator" }
-            if s.contains("Keyframe") { return "UIView.animateKeyframes" }
-            if s.contains("transitionWithView") || s.contains("transitionFromView") { return "UIView.transition" }
-            if s.contains("UIViewAnimationState") || s.contains("UIViewAnimationWithBlocks") || s.contains("animateWithDuration") || s.contains("UIViewAnimationBlockDelegate") {
-                return "UIView.animate"
-            }
-        }
-        return String(describing: type(of: anim))
-    }
-
     // MARK: Touches and screens
 
     func handle(_ event: UIEvent) {
         guard event.type == .touches, let touches = event.allTouches else { return }
+        OwnTime.measure { mark(touches) }
+    }
+
+    private func mark(_ touches: Set<UITouch>) {
         for touch in touches {
             switch touch.phase {
             case .began:
@@ -763,23 +808,67 @@ import UIKit
     }
 
     func didAppear(_ vc: UIViewController) {
-        guard isRecording, Self.isScreen(vc) else { return }
+        guard isRecording else { return }
+        OwnTime.measure { screenAppeared(vc) }
+    }
+
+    private func screenAppeared(_ vc: UIViewController) {
+        guard Self.isScreen(vc) else { return }
+        // A hosting controller may show a named SwiftUI screen, whose `onAppear` can come before or after
+        // this: the route is read once both have run (the named screen on top, else the screen on top,
+        // which is not an embedded hosting controller's own class).
+        if Self.isHosting(vc) { return screensChanged() }
         mark(route: Self.route(of: vc), params: vc.title.map { ["title": .string($0)] })
     }
+
+    /// A `.keyframerScreen` appeared, went or was renamed: the route is the named screen on top, else
+    /// what the controllers say. Read on the next turn of the run loop and stamped with the time of the
+    /// first change, so a swap (one appearing as the other goes, in either order) is one marker.
+    func screensChanged() {
+        guard isRecording, pendingScreensAt == nil else { return }
+        pendingScreensAt = elapsed()
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let t = self.pendingScreensAt else { return }
+                self.pendingScreensAt = nil
+                OwnTime.measure {
+                    if let route = self.currentRoute() { self.mark(route: route.0, params: route.1, at: t) }
+                }
+            }
+        }
+    }
+
+    private var pendingScreensAt: Double?
 
     /// A screen of the app's own: its controller class comes from the app, or hosts SwiftUI. Containers
     /// (navigation, tabs, split, page) are not screens; what they show is.
     static func isScreen(_ vc: UIViewController) -> Bool {
         if vc is UINavigationController || vc is UITabBarController || vc is UISplitViewController || vc is UIPageViewController { return false }
-        return Bundle(for: type(of: vc)) == Bundle.main || String(describing: type(of: vc)).hasPrefix("UIHostingController")
+        return Bundle(for: type(of: vc)) == Bundle.main || isHosting(vc)
     }
 
+    /// A SwiftUI hosting controller: `UIHostingController`, a subclass of the app's, or one of SwiftUI's
+    /// own (a sheet's `PresentationHostingController`), told by name since those are private.
+    static func isHosting(_ vc: UIViewController) -> Bool {
+        var cls: AnyClass? = type(of: vc)
+        while let c = cls, c != UIViewController.self {
+            if NSStringFromClass(c).contains("HostingController") { return true }
+            cls = class_getSuperclass(c)
+        }
+        return false
+    }
+
+    /// A controller's route: its class's name without generic arguments. A window's root hosting
+    /// controller is `App`: in a SwiftUI `App` it holds every screen (`.keyframerScreen` names them).
     static func route(of vc: UIViewController) -> String {
-        String(describing: type(of: vc))
+        if isHosting(vc), UIApplication.shared.kf_windows.contains(where: { $0.rootViewController === vc }) { return "App" }
+        return SignalRegistry.typeName(vc)
     }
 
-    /// The screen on top now: presented controllers first, then what containers show.
+    /// The screen on top now: the latest named SwiftUI screen, else presented controllers first, then
+    /// what containers show.
     private func currentRoute() -> (String, [String: JSONValue]?)? {
+        if let named = Registry.screens.top { return (named, nil) }
         var vc = UIApplication.shared.kf_keyWindow?.rootViewController
         while let cur = vc {
             if let presented = cur.presentedViewController, !presented.isBeingDismissed { vc = presented; continue }
@@ -876,7 +965,7 @@ import UIKit
         // The pins reach the render server on the next commit and the screen a frame later.
         try? await Task.sleep(nanoseconds: 50_000_000)
         let format = request.format ?? "jpg"
-        if let data = ScreenCapture.snapshot(width: request.width, format: format, quality: request.quality ?? 0.85) {
+        if let data = OwnTime.measure({ ScreenCapture.snapshot(width: request.width, format: format, quality: request.quality ?? 0.85) }) {
             send(.frame(CapturedFrame(id: request.id, data: data, format: format)))
         } else {
             send(.frame(CapturedFrame(id: request.id, error: "No window to capture.")))

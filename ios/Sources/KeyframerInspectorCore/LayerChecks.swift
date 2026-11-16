@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 import QuartzCore
 
@@ -151,3 +152,4 @@ public enum RenderHints {
         return r == r.rounded() ? String(Int(r)) : String(r)
     }
 }
+#endif

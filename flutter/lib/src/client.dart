@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import 'call_site.dart';
 import 'frame_meter.dart';
+import 'own_time.dart';
 import 'protocol.dart';
 import 'runtime.dart';
 
@@ -110,6 +111,10 @@ abstract interface class KfSceneHost {
 const _maxQueued = 2000;
 const _maxBackoff = Duration(seconds: 10);
 
+/// How long one batch spends building animation starts (printing their stacks) at most, in ms: half a
+/// frame at 120 Hz. At least one is built per batch.
+const _buildBudgetMs = 4;
+
 class KfInspectorClient implements KfSink {
   KfInspectorClient({
     required this.url,
@@ -157,8 +162,8 @@ class KfInspectorClient implements KfSink {
     return () => sw.elapsedMicroseconds / 1000;
   }
 
-  // What waits for the next flush.
-  List<Map<String, Object?>> _queue = [];
+  // What waits for the next flush: events as JSON maps, and animation starts (_PendingAnim) built then.
+  List<Object> _queue = [];
   List<KfSample> _samples = [];
   List<KfFrameStat> _frames = [];
   List<KfFrameDrop> _drops = [];
@@ -215,26 +220,27 @@ class KfInspectorClient implements KfSink {
       _display = device.display;
       _accessibility = device.accessibility;
       _appState = device.appState;
-      _unwatchDevice = device.watchDevice(_deviceChanged);
+      _unwatchDevice = device.watchDevice(() => KfOwnTime.measure(_deviceChanged));
     }
     _connect();
   }
 
   // ── KfSink ────────────────────────────────────────────────────────────
+  /// Kept as it is until the next batch is built (between frames): the site and the stack are read
+  /// then, everything else now. See [_PendingAnim].
   @override
   void anim(KfCallSite site, List<Object?> args, {List<KfStackFrame>? frames, num? durationMs}) {
     final recording = this.recording;
-    // Stacks only while recording, as client.ts does: what a frame drop is traced back to.
-    final withStack = recording && frames != null && frames.isNotEmpty;
     _enqueue(
-      KfEvent.anim(
+      _PendingAnim(
         eid: _nextEid++,
         site: site,
         at: _wall(),
         args: sanitizeArgs(args),
         t: recording ? _elapsed.round() : null,
-        stack: withStack ? _nonEmpty(formatStack(frames, appPackage: runtime.appPackage, root: runtime.root)) : null,
-        frames: withStack ? inspectorFrames(frames, appPackage: runtime.appPackage, root: runtime.root) : null,
+        // Stacks only while recording, as client.ts does: what a frame drop is traced back to. Not
+        // kept otherwise, so a start's stack is read no further than its call site then.
+        frames: recording ? frames : null,
         durationMs: durationMs == null || !durationMs.isFinite ? null : durationMs.round(),
       ),
     );
@@ -258,7 +264,7 @@ class KfInspectorClient implements KfSink {
     _enqueue(KfEvent.unsignal(id, t: recording ? _elapsed.round() : null));
   }
 
-  void _enqueue(Map<String, Object?> e) {
+  void _enqueue(Object e) {
     _queue.add(e);
     if (_queue.length > _maxQueued) _queue = _queue.sublist(_queue.length - _maxQueued);
   }
@@ -271,12 +277,30 @@ class KfInspectorClient implements KfSink {
     return true;
   }
 
-  /// Sends what is queued. Runs every [batch].
-  void flush() {
+  /// Sends what is queued. Runs every [batch], between frames: the animation starts queued since the
+  /// last one are built here (their stacks printed), as many as fit in [_buildBudgetMs]. The rest go
+  /// with the next batches, so a backlog (the starts kept while the relay was away) never holds up a
+  /// frame. Nothing is built while disconnected: an app no editor ever connects to prints no stacks.
+  void flush() => KfOwnTime.measure(() {
     if (_socket == null) return;
     if (_queue.isNotEmpty) {
-      _send(KfAppMessage.events(_queue));
-      _queue = [];
+      final started = _now();
+      final out = <Map<String, Object?>>[];
+      var n = 0;
+      while (n < _queue.length && (n == 0 || _now() - started < _buildBudgetMs)) {
+        final e = _queue[n++];
+        if (e is! _PendingAnim) {
+          out.add(e as Map<String, Object?>);
+          continue;
+        }
+        try {
+          out.add(e.build(runtime));
+        } catch (_) {
+          // A start whose stack cannot be read is left out: never the batch, and never the app.
+        }
+      }
+      if (out.isNotEmpty) _send(KfAppMessage.events(out));
+      _queue = n == _queue.length ? [] : _queue.sublist(n);
     }
     if (_samples.isNotEmpty || _frames.isNotEmpty || _drops.isNotEmpty || _markers.isNotEmpty) {
       _send(KfAppMessage.samples(samples: _samples, frames: _frames, drops: _drops, markers: _markers));
@@ -285,7 +309,7 @@ class KfInspectorClient implements KfSink {
       _drops = [];
       _markers = [];
     }
-  }
+  });
 
   /// How the app was built (debug frames are slower, so the inspector scales its thresholds):
   /// Flutter's kDebugMode / kProfileMode, from the same compile-time flags, so this file stays free
@@ -390,7 +414,9 @@ class KfInspectorClient implements KfSink {
   }
 
   // ── Messages from editors ─────────────────────────────────────────────
-  void _onMessage(String data) {
+  void _onMessage(String data) => KfOwnTime.measure(() => _handle(data));
+
+  void _handle(String data) {
     if (data == 'pong' || data == 'ping') return;
     Object? decoded;
     try {
@@ -404,7 +430,8 @@ class KfInspectorClient implements KfSink {
       case 'overrides':
         runtime.overrides = _overrides(msg['overrides']);
       case 'replay':
-        runtime.replay?.call();
+        // The app's own code (a screen mounted again): its time, not the inspector's.
+        KfOwnTime.notOurs(() => runtime.replay?.call());
       case 'record':
         final ids = (msg['signalIds'] as List?)?.whereType<String>().toList() ?? const [];
         final recorder = msg['recorder'];
@@ -629,7 +656,7 @@ class KfInspectorClient implements KfSink {
         _stopTimings = h.timings(_onTimings);
         _stopTouches = h.touches(_onTouch);
       } else {
-        _sampleTimer = Timer.periodic(sampleInterval, (_) => _sampleOnce(_elapsed));
+        _sampleTimer = Timer.periodic(sampleInterval, (_) => KfOwnTime.measure(() => _sampleOnce(_elapsed)));
       }
       // The screen it starts on, then every screen change.
       final start = runtime.currentRoute;
@@ -643,8 +670,9 @@ class KfInspectorClient implements KfSink {
       if (scene != null) {
         _stopScene = scene.watchScene(
           runtime,
+          // Only for the values being recorded: another one has no samples for the marker to explain.
           onVisibility: (id, visible, reason) {
-            if (recording) {
+            if (recording && _recording.contains(id)) {
               _marker(KfMarker.visibility(t: _elapsed.round(), id: id, visible: visible, reason: reason));
             }
           },
@@ -663,12 +691,19 @@ class KfInspectorClient implements KfSink {
     }
   }
 
+  /// After every frame while recording. The frame meter measures the UI isolate by the gaps between
+  /// these calls, so a long frame is the stretch since the last one: the inspector's own time over that
+  /// stretch goes with it (`inspectorMs`). This call's sampling counts toward the next: it holds up the
+  /// next frame, not this one.
   void _onFrame() {
+    final own = KfOwnTime.take();
     if (!recording) return;
-    final t = _elapsed;
-    _uiMeter?.tick(t);
-    _drainMeters();
-    _sampleOnce(t);
+    KfOwnTime.measure(() {
+      final t = _elapsed;
+      _uiMeter?.tick(t, inspectorMs: own);
+      _drainMeters();
+      _sampleOnce(t);
+    });
   }
 
   void _sampleOnce(double t) {
@@ -684,7 +719,8 @@ class KfInspectorClient implements KfSink {
   /// Raster timings arrive in batches, timed by the engine's clock: mapped onto the recording's clock
   /// by the smallest offset seen (the batch that arrived with the least delay), as client.ts maps the
   /// UI thread's frames.
-  void _onTimings(List<KfTiming> timings) {
+  /// The raster thread's drops carry no `inspectorMs`: the inspector does all its work on the UI isolate.
+  void _onTimings(List<KfTiming> timings) => KfOwnTime.measure(() {
     final m = _rasterMeter;
     if (m == null || timings.isEmpty) return;
     final latest = timings.map((t) => t.rasterEnd).reduce((a, b) => a > b ? a : b);
@@ -695,7 +731,7 @@ class KfInspectorClient implements KfSink {
       if (at >= 0) m.tickCost(at, t.rasterMs);
     }
     _drainMeters();
-  }
+  });
 
   void _drainMeters() {
     for (final m in [_uiMeter, _rasterMeter]) {
@@ -706,7 +742,9 @@ class KfInspectorClient implements KfSink {
     }
   }
 
-  void _onTouch(KfTouch touch) {
+  void _onTouch(KfTouch touch) => KfOwnTime.measure(() => _touch(touch));
+
+  void _touch(KfTouch touch) {
     final now = _elapsed;
     var t = now;
     final stamp = touch.stamp;
@@ -747,7 +785,7 @@ class KfInspectorClient implements KfSink {
     final ordered = List.of(recorded)..sort((a, b) => a.t.compareTo(b.t));
     final screens = List.of(routes)..sort((a, b) => a.t.compareTo(b.t));
     if (ordered.isEmpty) {
-      if (screens.isNotEmpty) runtime.navigateTo(screens.first.route, screens.first.params);
+      if (screens.isNotEmpty) _app(() => runtime.navigateTo(screens.first.route, screens.first.params));
       return;
     }
     final t0 = screens.isNotEmpty && screens.first.t < ordered.first.t ? screens.first.t : ordered.first.t;
@@ -759,15 +797,15 @@ class KfInspectorClient implements KfSink {
       final elapsed = _now() - start;
       while (r < screens.length && screens[r].t - t0 <= elapsed) {
         final s = screens[r++];
-        runtime.navigateTo(s.route, s.params);
+        _app(() => runtime.navigateTo(s.route, s.params));
       }
       while (i < ordered.length && ordered[i].t - t0 <= elapsed) {
         final s = ordered[i++];
         final sig = runtime.signals[s.id];
         if (sig != null) {
           // A value that mounted mid-playback (the next screen's) is taken over when first written.
-          if (_playing.add(sig)) sig.beginPlayback?.call();
-          sig.write(s.v);
+          if (_playing.add(sig)) _app(() => sig.beginPlayback?.call());
+          _app(() => sig.write(s.v));
         }
       }
       if (i >= ordered.length && r >= screens.length) {
@@ -782,7 +820,7 @@ class KfInspectorClient implements KfSink {
 
     step();
     if (i < ordered.length || r < screens.length) {
-      _playbackTimer = Timer.periodic(sampleInterval, (_) => step());
+      _playbackTimer = Timer.periodic(sampleInterval, (_) => KfOwnTime.measure(step));
     }
   }
 
@@ -793,7 +831,7 @@ class KfInspectorClient implements KfSink {
       final s = runtime.signals[id];
       if (s == null) continue;
       if (restore && !_playing.contains(s)) _restore[s] = s.read();
-      if (_playing.add(s)) s.beginPlayback?.call();
+      if (_playing.add(s)) _app(() => s.beginPlayback?.call());
     }
   }
 
@@ -813,8 +851,10 @@ class KfInspectorClient implements KfSink {
         continue;
       }
       final v = restore[s];
-      if (v != null) s.write(v);
-      s.endPlayback?.call();
+      _app(() {
+        if (v != null) s.write(v);
+        s.endPlayback?.call();
+      });
     }
   }
 
@@ -880,7 +920,7 @@ class KfInspectorClient implements KfSink {
     }
     String? error;
     try {
-      await run();
+      await KfOwnTime.notOurs(run);
     } catch (e) {
       error = e.toString();
     }
@@ -911,6 +951,48 @@ class KfInspectorClient implements KfSink {
   }
 }
 
+/// An animation start waiting in the queue. What it was and when (its eid, wall clock time, recording
+/// time, arguments) is fixed when it starts; its site and stack (printed from the stack trace, the most
+/// expensive part of a start) are read when its batch is built, between frames. Its place in the queue
+/// keeps the events in the order they happened.
+class _PendingAnim {
+  _PendingAnim({
+    required this.eid,
+    required this.site,
+    required this.at,
+    required this.args,
+    required this.t,
+    required this.frames,
+    required this.durationMs,
+  });
+
+  final int eid;
+  final KfCallSite site;
+  final int at;
+  final List<Object?> args;
+  final int? t;
+  final List<KfStackFrame>? frames;
+  final int? durationMs;
+
+  Map<String, Object?> build(KfRuntime runtime) {
+    final frames = this.frames;
+    final stack =
+        frames != null && frames.isNotEmpty
+            ? formatFrames(frames, appPackage: runtime.appPackage, root: runtime.root)
+            : null;
+    return KfEvent.anim(
+      eid: eid,
+      site: site,
+      at: at,
+      args: args,
+      t: t,
+      stack: stack == null ? null : _nonEmpty(stack.stack),
+      frames: stack?.frames,
+      durationMs: durationMs,
+    );
+  }
+}
+
 /// A JSON-safe copy of animation arguments: numbers, strings, bools and plain maps and lists survive,
 /// functions and other objects become their description. Mirrors client.ts sanitizeArgs.
 List<Object?> sanitizeArgs(List<Object?> args) {
@@ -932,6 +1014,10 @@ List<Object?> sanitizeArgs(List<Object?> args) {
 }
 
 num _tenth(double v) => (v * 10).round() / 10;
+
+/// The app's code the inspector calls into (a value written during playback, its controller stopped or
+/// handed back, a screen navigated to): the app's time, not the inspector's.
+T _app<T>(T Function() body) => KfOwnTime.notOurs(body);
 
 /// The fastest speed `time` sets, and the most frames one `step` advances.
 const double kfMaxTimeScale = 1;

@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// Counts one thread's frames while a recording runs: its frame rate per window and every long frame.
@@ -43,8 +44,9 @@ public struct FrameMeter: Sendable {
     }
 
     /// A frame was drawn at `t` (ms). A tick that is not later than the last one (a display link
-    /// timestamp from just before `start`) is left out.
-    public mutating func tick(_ t: Double) {
+    /// timestamp from just before `start`) is left out. `inspectorMs`: how long the inspector itself
+    /// worked on this thread since the last tick (OwnTime), kept on the drop when 0.5 ms or more.
+    public mutating func tick(_ t: Double, inspectorMs: Double = 0) {
         let previous = last
         if previous >= 0 && t <= previous { return }
         last = t
@@ -57,7 +59,8 @@ public struct FrameMeter: Sendable {
         let lost = max(0, Int((dt / interval).rounded(.toNearestOrAwayFromZero)) - 1)
         if lost > 0 {
             dropped += lost
-            drops.append(InspectorFrameDrop(t: t, thread: thread, ms: (dt * 10).rounded() / 10, dropped: lost))
+            let own = inspectorMs >= 0.5 ? (inspectorMs * 10).rounded() / 10 : nil
+            drops.append(InspectorFrameDrop(t: t, thread: thread, ms: (dt * 10).rounded() / 10, dropped: lost, inspectorMs: own))
         }
         frames += 1
         let span = t - windowStart
@@ -82,3 +85,4 @@ public struct FrameMeter: Sendable {
         return (stats, drops)
     }
 }
+#endif

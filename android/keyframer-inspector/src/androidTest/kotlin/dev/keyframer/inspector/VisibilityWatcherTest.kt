@@ -20,7 +20,7 @@ class VisibilityWatcherTest {
             scenario.onActivity { a ->
                 view = View(a)
                 a.root.addView(view, 100, 100)
-                watcher = VisibilityWatcher({ listOf(ViewTarget(listOf("box"), view, active = true)) }, { true }) { m -> markers.add(m as Marker.Visibility) }
+                watcher = VisibilityWatcher({ listOf(ViewTarget(listOf("box"), view, active = true)) }, { true }, { true }) { m -> markers.add(m as Marker.Visibility) }
                 watcher.start()
             }
             fun step(change: (View) -> Unit) {

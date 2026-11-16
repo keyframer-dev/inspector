@@ -16,6 +16,7 @@ import dev.keyframer.inspector.core.CallSites
 import dev.keyframer.inspector.core.InspectorSession
 import dev.keyframer.inspector.core.Signal
 import dev.keyframer.inspector.core.SignalSite
+import dev.keyframer.inspector.core.StackFrame
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
@@ -33,11 +34,34 @@ import java.util.WeakHashMap
 @OptIn(KeyframerExtensionApi::class)
 internal val liveSession: InspectorSession? get() = KeyframerExtensions.session
 
-/** The first app frame of a composition's stack, or null when the inspector is not running. */
+/** The app's own animation helpers (KeyframerConfig.libraryPrefixes), skipped when looking for a call site. */
 @OptIn(KeyframerExtensionApi::class)
-internal fun locate(stack: Array<StackTraceElement>): CallSites.Located? {
+internal val libraryPrefixes: List<String> get() = KeyframerExtensions.libraryPrefixes
+
+/** The first app frame of a stack, skipping the app's own animation helpers (KeyframerConfig.libraryPrefixes). */
+internal fun firstAppFrame(stack: Array<StackTraceElement>): StackTraceElement? = CallSites.firstAppFrame(stack, libraryPrefixes)
+
+/** `block`, timed as the inspector's own work on the main thread (see OwnTime). */
+@OptIn(KeyframerExtensionApi::class)
+internal inline fun <R> inspectorWork(block: () -> R): R = KeyframerExtensions.ownTime.time(block)
+
+/** `taken`'s stack read off the main thread into what `read` makes of it, then `then` on the main thread. */
+@OptIn(KeyframerExtensionApi::class)
+internal fun <T> readStack(taken: Throwable, read: (Array<StackTraceElement>) -> T, then: (T) -> Unit) = KeyframerExtensions.readStack(taken, read, then)
+
+/**
+ * `make` with the call site of the composition calling this (its first app frame) and its stack, or
+ * null when the inspector is not running. That is checked before the stack is taken: taking one costs
+ * more than everything else a tracked call does, and an app whose inspector is off pays nothing. Read
+ * now, once per composition of a tracked call: its signals' ids are registered within the frame.
+ */
+internal inline fun <R : Any> atCallSite(make: (CallSites.Located, Array<StackTraceElement>) -> R): R? {
     if (liveSession == null) return null
-    return CallSites.firstAppFrame(stack, KeyframerExtensions.libraryPrefixes)?.let { CallSites.site(it) }
+    return inspectorWork {
+        val stack = Throwable().stackTrace
+        val at = firstAppFrame(stack)?.let { CallSites.site(it) } ?: return null
+        make(at, stack)
+    }
 }
 
 /**
@@ -120,8 +144,8 @@ internal abstract class Tracker(val at: CallSites.Located, val stack: Array<Stac
 
     fun ownedBy(context: Context): Tracker = also { owner = context.activity()?.let { WeakReference(it) } }
 
-    fun attach() {
-        val s = liveSession ?: return
+    fun attach() = inspectorWork {
+        val s = liveSession ?: return@inspectorWork
         // The label is part of the id, as a tracked animator's name is: rows that label their values
         // keep ids of their own from run to run.
         id = SignalIds.acquire(label?.let { "${at.id}:$it" } ?: at.id, this)
@@ -132,8 +156,8 @@ internal abstract class Tracker(val at: CallSites.Located, val stack: Array<Stac
         }
     }
 
-    fun detach() {
-        if (!attached) return
+    fun detach() = inspectorWork {
+        if (!attached) return@inspectorWork
         attached = false
         if (!lost) liveSession?.let { s -> signals.forEach { s.removeSignal(it) } }
         signals.clear()
@@ -153,11 +177,39 @@ internal abstract class Tracker(val at: CallSites.Located, val stack: Array<Stac
     protected fun site(sid: String, name: String?, writable: Boolean, kind: String? = null) =
         SignalSite(sid, at.file, at.line, at.component, name, column = 0, writable = if (writable) null else false, kind = kind)
 
-    protected fun report(spec: AnimationSpec<*>?, args: Map<String, Any?>, durationMs: Long?, target: String? = label, prop: String? = null) {
+    /** The composition's [stack] as an event's frames, made the first time a start is recorded. */
+    private var stackFrames: List<StackFrame>? = null
+
+    /**
+     * One `anim` event. `stack` rides along as frames while recording: the composition's (made into frames
+     * once, not at every start), unless the start has its own.
+     */
+    protected fun report(
+        spec: AnimationSpec<*>?,
+        args: Map<String, Any?>,
+        durationMs: Long?,
+        target: String? = label,
+        prop: String? = null,
+        stack: Array<StackTraceElement> = this.stack,
+    ) {
         val s = liveSession ?: return
-        val site = CallSite(at.id, at.file, at.line, 0, fn, at.component, target, prop, spec?.let { Specs.params(it) }.orEmpty())
-        s.reportAnim(site, listOf(args), stack, durationMs)
+        val start = s.animStart()
+        val frames = when {
+            !start.recording -> null
+            stack !== this.stack -> s.frames(stack)
+            else -> stackFrames ?: s.frames(stack).also { stackFrames = it }
+        }
+        s.reportAnim(callSite(spec, target, prop), listOf(args), durationMs, start, frames)
     }
+
+    /** One `anim` event for a start at `start`, reported once its stack was read: `frames` from it while recording. */
+    protected fun report(spec: AnimationSpec<*>?, args: Map<String, Any?>, durationMs: Long?, start: InspectorSession.AnimStart, frames: List<StackFrame>?) {
+        val s = liveSession ?: return
+        s.reportAnim(callSite(spec, label, null), listOf(args), durationMs, start, frames)
+    }
+
+    private fun callSite(spec: AnimationSpec<*>?, target: String?, prop: String?) =
+        CallSite(at.id, at.file, at.line, 0, fn, at.component, target, prop, spec?.let { Specs.params(it) }.orEmpty())
 
     /** The panel's live edits for this call site. */
     protected fun overrides(): Map<String, Double>? = liveSession?.overrides?.get(at.id)
@@ -233,13 +285,13 @@ internal class ValueTracker<T, V : AnimationVector>(
     }
 
     /** An animation to `target` starts: reported, with the panel's edits applied to the spec it runs. */
-    fun started(target: T, spec: AnimationSpec<T>): AnimationSpec<T> {
+    fun started(target: T, spec: AnimationSpec<T>): AnimationSpec<T> = inspectorWork {
         val effective = Specs.withOverrides(spec, overrides())
         val from = animatable.value
         val args = Specs.describe(effective)
         args["values"] = values(from, target)
         report(effective, args, Specs.durationMs(effective, animatable.typeConverter, from, target, animatable.velocityVector))
-        return effective
+        effective
     }
 
     private fun values(from: T, to: T): Map<String, List<Float>> {
@@ -276,7 +328,7 @@ internal class TransitionTracker<S>(
     )
 
     /** Children compose after the transition: picked up after each composition. */
-    fun syncChildren() {
+    fun syncChildren() = inspectorWork {
         for (child in transition.animations) {
             if (!seen.add(child)) continue
             for (sig in childSignals(child.label, child.typeConverter, { child.value })) addSignal(sig)
@@ -296,9 +348,9 @@ internal class TransitionTracker<S>(
     }
 
     /** After a composition that changed the target: the children have their new targets and specs. */
-    fun targetChanged() {
+    fun targetChanged() = inspectorWork {
         val target = transition.targetState
-        if (target == lastTarget) return
+        if (target == lastTarget) return@inspectorWork
         val from = lastTarget
         lastTarget = target
         val children = LinkedHashMap<String, Any?>()
@@ -321,7 +373,7 @@ internal class InfiniteTracker(
 
     override fun makeSignals(): List<Signal> = emptyList()
 
-    fun syncChildren() {
+    fun syncChildren() = inspectorWork {
         for (child in transition.animations) {
             if (!seen.add(child)) continue
             add(child)

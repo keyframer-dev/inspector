@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// A layer's own clock (CAMediaTiming): its local time is `(parent - beginTime) * speed + timeOffset`,
@@ -186,3 +187,4 @@ public struct LayerClock: Hashable, Sendable {
         return local0 + (map.local(atMedia: m) - map.local(atMedia: media0)) * rate
     }
 }
+#endif

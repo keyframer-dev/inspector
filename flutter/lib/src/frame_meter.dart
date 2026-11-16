@@ -41,8 +41,9 @@ class FrameMeter {
   final List<KfFrameStat> stats = [];
   final List<KfFrameDrop> drops = [];
 
-  /// A frame of the frame loop was handled at `t` (ms).
-  void tick(double t) {
+  /// A frame of the frame loop was handled at `t` (ms). `inspectorMs`: how long the inspector itself
+  /// worked on this thread since the last tick (KfOwnTime), kept on the drop when 0.5 ms or more.
+  void tick(double t, {double inspectorMs = 0}) {
     final last = _last;
     _last = t;
     if (last < 0) {
@@ -55,7 +56,15 @@ class FrameMeter {
     final lost = (dt / interval).round() - 1;
     if (lost > 0) {
       _dropped += lost;
-      drops.add(KfFrameDrop(t: _round(t), thread: thread, ms: _tenth(dt), dropped: lost));
+      drops.add(
+        KfFrameDrop(
+          t: _round(t),
+          thread: thread,
+          ms: _tenth(dt),
+          dropped: lost,
+          inspectorMs: inspectorMs >= 0.5 ? _tenth(inspectorMs) : null,
+        ),
+      );
     }
     _count(t);
   }

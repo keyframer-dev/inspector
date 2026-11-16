@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import UIKit
 

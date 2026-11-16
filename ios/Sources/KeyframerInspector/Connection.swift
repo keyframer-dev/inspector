@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import Foundation
 
 /// One WebSocket to the relay, reconnecting with backoff (0.5 s doubling to 10 s, like the React

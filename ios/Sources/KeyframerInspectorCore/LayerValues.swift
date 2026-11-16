@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import CoreGraphics
 import Foundation
 import QuartzCore
@@ -125,3 +126,4 @@ public struct AngleUnwrapper: Sendable {
         return value
     }
 }
+#endif

@@ -22,7 +22,7 @@ The desktop app runs on macOS, Windows and Linux; see [Desktop app](../getting-s
 
 | | React Native | Flutter | iOS UIKit | iOS SwiftUI | Android Views | Compose |
 |---|---|---|---|---|---|---|
-| Animations found | All Reanimated calls, CSS and layout animations | `KfAnimationController` starts, implicit animations, Hero flights | Every Core Animation animation | Only traced values | Tracked animators | Tracked calls |
+| Animations found | All Reanimated calls, CSS and layout animations | `KfAnimationController` starts, implicit animations, Hero flights | Every Core Animation animation | Traced values, and what a `withKeyframerAnimation` moved | Tracked animators | Tracked calls |
 | Exact source line | Yes (Babel plugin) | Yes, from the stack | With `trace`; otherwise the function name | Yes, with `withKeyframerAnimation` | Yes, from the stack | Yes, from the stack |
 | Slow motion, pause, step | Yes | Yes, every animation | Yes, under the key window | Partly (see limits) | Slow motion for all; pause holds tracked animators | Yes, every animation |
 | Frames on two threads | JS and UI | UI isolate and Raster | Main only | Main only | Main only | Main only |
@@ -31,7 +31,7 @@ The desktop app runs on macOS, Windows and Linux; see [Desktop app](../getting-s
 
 ## Known limits
 
-- **SwiftUI:** animations not wrapped with the trace are not seen, traced values cannot be played back, and pause and step reach Core Animation only.
+- **SwiftUI:** values outside a trace are seen only as the layers a `withKeyframerAnimation` moved, while recording (a plain `withAnimation` or an implicit `.animation` is not seen). Traced values cannot be played back, and pause and step reach Core Animation only.
 - **iOS:** there is no `ui` thread entry. A hitch in the render server while the main thread is idle is not seen.
 - **Android:** animators must be registered with `kfTrack`. `ViewPropertyAnimator`, `SpringAnimation`, `Transition`s and `MotionLayout` are not tracked. When paused, `ViewPropertyAnimator` and Transitions are not held. Compose transitions are read only.
 - **Flutter:** `AnimatedSwitcher`, `AnimatedCrossFade` and `AnimatedSize` are not tracked. Implicit animations need widget creation tracking (debug builds from `flutter run`).

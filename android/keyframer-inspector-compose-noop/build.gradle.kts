@@ -13,6 +13,7 @@ android {
 
     defaultConfig {
         minSdk = 24
+        consumerProguardFiles("consumer-rules.pro")
     }
 
     buildFeatures {
@@ -34,4 +35,6 @@ kotlin {
 dependencies {
     api(project(":keyframer-inspector-noop"))
     api("androidx.compose.animation:animation:1.7.6")
+    // KfNavigation's signature: only for apps that use Navigation (they bring it).
+    compileOnly("androidx.navigation:navigation-runtime:2.7.7")
 }

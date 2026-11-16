@@ -7,7 +7,7 @@ section: The panel
 
 # Recordings library
 
-A recording is a `.kfrec.json` file. It holds every animated value, both threads' frame rates and long frames, every animation with its source line and stack, React commits, touches, screen changes, app state, the keyboard, warnings and errors, and (from the device recorder) a screenshot every 1.5 s.
+A recording is a `.kfrec.json` file. It holds every animated value, both threads' frame rates and long frames (each with how long the inspector itself worked in it), every animation with its source line and stack, React commits, touches, screen changes, app state, the keyboard, warnings and errors, and (from the device recorder) a screenshot every 1.5 s.
 
 ## Where it lives
 

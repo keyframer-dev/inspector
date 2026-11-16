@@ -43,4 +43,4 @@ It works with React Native, Flutter, iOS (UIKit and SwiftUI) and Android (Views 
 
 ## Status
 
-Version 0.2.0 is being prepared and is not published yet. Where a feature has known limits, the page says so. The full list is in the [FAQ](faq/faq.md#what-are-the-known-limits).
+Where a feature has known limits, the page says so. The full list is in the [FAQ](faq/faq.md#what-are-the-known-limits).

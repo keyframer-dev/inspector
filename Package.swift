@@ -1,7 +1,11 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.1
 // The iOS SDK, resolvable from this repository's URL. ios/Package.swift is the same package for
 // working inside ios/.
 import PackageDescription
+
+// The development inspector is compiled only into Debug builds (Release builds get the same API doing
+// nothing); the `ReleaseBuilds` trait keeps it in Release builds. See ios/Package.swift.
+let inspectorSettings: [SwiftSetting] = [.define("KEYFRAMER_INSPECTOR_RELEASE", .when(traits: ["ReleaseBuilds"]))]
 
 let package = Package(
     name: "KeyframerInspector",
@@ -12,13 +16,17 @@ let package = Package(
         // Motion Vitals, the production reporter (MIT); separate from the development inspector.
         .library(name: "KeyframerVitals", targets: ["KeyframerVitals"]),
     ],
+    traits: [
+        .trait(name: "ReleaseBuilds", description: "Keep the development inspector in Release builds (it is compiled out of them otherwise)."),
+    ],
     targets: [
-        .target(name: "KeyframerInspectorCore", path: "ios/Sources/KeyframerInspectorCore"),
-        .target(name: "KeyframerInspector", dependencies: ["KeyframerInspectorCore"], path: "ios/Sources/KeyframerInspector"),
+        .target(name: "KeyframerInspectorCore", path: "ios/Sources/KeyframerInspectorCore", swiftSettings: inspectorSettings),
+        .target(name: "KeyframerInspector", dependencies: ["KeyframerInspectorCore"], path: "ios/Sources/KeyframerInspector", swiftSettings: inspectorSettings),
         .target(
             name: "KeyframerInspectorSwiftUI",
             dependencies: ["KeyframerInspector", "KeyframerInspectorCore"],
-            path: "ios/Sources/KeyframerInspectorSwiftUI"
+            path: "ios/Sources/KeyframerInspectorSwiftUI",
+            swiftSettings: inspectorSettings
         ),
         .testTarget(
             name: "KeyframerInspectorCoreTests",
@@ -34,5 +42,7 @@ let package = Package(
             dependencies: ["KeyframerVitals", "KeyframerInspectorCore"],
             path: "ios/Tests/KeyframerVitalsTests"
         ),
-    ]
+    ],
+    // The sources are written for the Swift 5 language mode (what tools 5.9 gave them).
+    swiftLanguageModes: [.v5]
 )

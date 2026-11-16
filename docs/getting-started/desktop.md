@@ -23,7 +23,7 @@ Download it from the [Releases](https://github.com/keyframer-dev/inspector/relea
 
 ## Connect an app
 
-The relay listens on `ws://127.0.0.1:8790`, on every interface, so a phone on the same network reaches it at the address the status bar shows (`Devices: ws://<lan ip>:8790/app`).
+The relay listens on `ws://127.0.0.1:8790`, on every interface, so a phone on the same network reaches it at the address the status bar shows (`Devices: ws://<lan ip>:8790/app`). A click on it copies the iOS launch argument (`-keyframerHost <lan ip>`).
 
 - iOS, Android and Flutter SDKs connect to it by default. See [iOS](ios.md), [Android](android.md), [Flutter](flutter.md).
 - React Native apps point `connectInspector` at it. See [React Native](react-native.md#use-the-desktop-app-instead).

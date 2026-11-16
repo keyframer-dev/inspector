@@ -40,6 +40,7 @@ import { currentRefreshRate, noteDisplay, uiThreadBridge, watchDisplay, watchUiW
 import { createDisplayMeter, frameBudget, tickDisplayMeter, type DisplayMeter } from './display'
 import { configureRecorder, isRecording, recordingElapsed, recordTouches, startRecording, stopRecording, watchRecording, watchSaved, type RecorderConfig } from './record'
 import { realFrameTime } from './clock'
+import { enterInspector, leaveInspector } from './ownTime'
 import { createInspector, getLayoutNode, getLayouts, isCapturing, isInspectorInstalled, remeasureLayouts, tapInspector, targetValues, tapTimeScale, timeScale, watchCapturing, watchLayouts } from './runtime'
 import type { InspectorMotionTracking } from '../../protocol/inspector'
 import { trackingLines } from './tracking'
@@ -247,46 +248,52 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
   }
   useFrameCallback((info) => {
     'worklet'
-    // The gap since the last callback, measured from timestamps so a skipped callback shows as one long
-    // frame. Real time: frame callbacks get the inspector's slowed clock while it controls the speed.
-    const ts = realFrameTime(info.timestamp)
-    // The display, read from these frames: kept on the UI runtime (an object in a shared value or a
-    // closure cannot be changed in place). What it learns goes to the rest of the inspector too.
-    const g = globalThis as { __KF_SCAN_DISPLAY__?: DisplayMeter }
-    let d = g.__KF_SCAN_DISPLAY__
-    if (d === undefined) {
-      d = createDisplayMeter()
-      g.__KF_SCAN_DISPLAY__ = d
-    }
-    if (tickDisplayMeter(d, ts)) scheduleOnRN(noteDisplay, d.hz, d.changes)
-    const last = uiLastTs.value
-    uiLastTs.value = ts
-    if (last === 0) return
-    const dt = ts - last
-    if (dt <= 0) return
-    if (dt < uiMinDt.value) uiMinDt.value = dt
-    if (dt > uiMaxDt.value) uiMaxDt.value = dt
-    if (dt < 10.5) uiFast.value += 1
-    else if (dt < 13) uiMid.value += 1
-    // One refresh of the display once it is known; until then, the guess from the last window.
-    const interval = frameBudget(d, knownHz.value, uiInterval.value)
-    const lost = Math.max(0, Math.round(dt / interval) - 1)
-    if (lost > 0) scheduleOnRN(onUiDrop, ts, lost, dt)
-    uiFrames.value += 1
-    if (uiWindowStart.value === 0) uiWindowStart.value = ts
-    const span = ts - uiWindowStart.value
-    if (span >= 500) {
-      // Until the display's rate is known: what most frames of the last window took, snapped to 60/90/120 Hz.
-      const m = uiMinDt.value
-      const n = uiFrames.value
-      uiInterval.value = uiFast.value * 2 > n ? 1000 / 120 : (uiFast.value + uiMid.value) * 2 > n ? 1000 / 90 : 1000 / 60
-      uiFast.value = 0
-      uiMid.value = 0
-      scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value, uiFrames.value)
-      uiFrames.value = 0
-      uiWindowStart.value = ts
-      uiMinDt.value = 1000
-      uiMaxDt.value = 0
+    // Motion Scan's own work on the UI thread (ownTime.ts): a recording's long frames tell it from the app's.
+    enterInspector()
+    try {
+      // The gap since the last callback, measured from timestamps so a skipped callback shows as one long
+      // frame. Real time: frame callbacks get the inspector's slowed clock while it controls the speed.
+      const ts = realFrameTime(info.timestamp)
+      // The display, read from these frames: kept on the UI runtime (an object in a shared value or a
+      // closure cannot be changed in place). What it learns goes to the rest of the inspector too.
+      const g = globalThis as { __KF_SCAN_DISPLAY__?: DisplayMeter }
+      let d = g.__KF_SCAN_DISPLAY__
+      if (d === undefined) {
+        d = createDisplayMeter()
+        g.__KF_SCAN_DISPLAY__ = d
+      }
+      if (tickDisplayMeter(d, ts)) scheduleOnRN(noteDisplay, d.hz, d.changes)
+      const last = uiLastTs.value
+      uiLastTs.value = ts
+      if (last === 0) return
+      const dt = ts - last
+      if (dt <= 0) return
+      if (dt < uiMinDt.value) uiMinDt.value = dt
+      if (dt > uiMaxDt.value) uiMaxDt.value = dt
+      if (dt < 10.5) uiFast.value += 1
+      else if (dt < 13) uiMid.value += 1
+      // One refresh of the display once it is known; until then, the guess from the last window.
+      const interval = frameBudget(d, knownHz.value, uiInterval.value)
+      const lost = Math.max(0, Math.round(dt / interval) - 1)
+      if (lost > 0) scheduleOnRN(onUiDrop, ts, lost, dt)
+      uiFrames.value += 1
+      if (uiWindowStart.value === 0) uiWindowStart.value = ts
+      const span = ts - uiWindowStart.value
+      if (span >= 500) {
+        // Until the display's rate is known: what most frames of the last window took, snapped to 60/90/120 Hz.
+        const m = uiMinDt.value
+        const n = uiFrames.value
+        uiInterval.value = uiFast.value * 2 > n ? 1000 / 120 : (uiFast.value + uiMid.value) * 2 > n ? 1000 / 90 : 1000 / 60
+        uiFast.value = 0
+        uiMid.value = 0
+        scheduleOnRN(onUiRate, Math.round((uiFrames.value * 1000) / span), m, uiMaxDt.value, uiFrames.value)
+        uiFrames.value = 0
+        uiWindowStart.value = ts
+        uiMinDt.value = 1000
+        uiMaxDt.value = 0
+      }
+    } finally {
+      leaveInspector()
     }
   }, enabled)
 
@@ -300,29 +307,34 @@ export function MotionScan({ children, enabled = true, fadeMs = 700, showPanel =
     let recent: number[] = []
     let interval = 1000 / 60
     const loop = (ts: number) => {
-      if (last) {
-        const dt = ts - last
-        recent.push(dt)
-        const lost = droppedFrames(dt, interval)
-        if (lost > 0) {
-          totals.current.dropped += lost
-          sessionRef.current?.tracker.onDrop(Date.now(), lost, dt)
+      enterInspector()
+      try {
+        if (last) {
+          const dt = ts - last
+          recent.push(dt)
+          const lost = droppedFrames(dt, interval)
+          if (lost > 0) {
+            totals.current.dropped += lost
+            sessionRef.current?.tracker.onDrop(Date.now(), lost, dt)
+          }
         }
+        last = ts
+        frames++
+        if (!windowStart) windowStart = ts
+        if (ts - windowStart >= 500) {
+          // Its own rate, never faster than the display: React Native's JS thread often runs at 60 on a
+          // 120 Hz screen, and is judged at the rate it runs (frameIntervalOf takes the median).
+          interval = frameIntervalOf(recent, currentRefreshRate() || null)
+          const fps = Math.round((frames * 1000) / (ts - windowStart))
+          setRates((r) => (r.js === fps && r.dropped === totals.current.dropped ? r : { ...r, js: fps, dropped: totals.current.dropped }))
+          frames = 0
+          windowStart = ts
+          recent = []
+        }
+        raf = requestAnimationFrame(loop)
+      } finally {
+        leaveInspector()
       }
-      last = ts
-      frames++
-      if (!windowStart) windowStart = ts
-      if (ts - windowStart >= 500) {
-        // Its own rate, never faster than the display: React Native's JS thread often runs at 60 on a
-        // 120 Hz screen, and is judged at the rate it runs (frameIntervalOf takes the median).
-        interval = frameIntervalOf(recent, currentRefreshRate() || null)
-        const fps = Math.round((frames * 1000) / (ts - windowStart))
-        setRates((r) => (r.js === fps && r.dropped === totals.current.dropped ? r : { ...r, js: fps, dropped: totals.current.dropped }))
-        frames = 0
-        windowStart = ts
-        recent = []
-      }
-      raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
     return () => cancelAnimationFrame(raf)

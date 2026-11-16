@@ -19,6 +19,7 @@ import type {
   InspectorWorkletIssue,
 } from '../../protocol/inspector'
 import { useEffect } from 'react'
+import { enterInspector, leaveInspector } from './ownTime'
 import { isScrollSample } from './scrollIds'
 import { watchWorkletCrashes, type KnownSuspect } from './workletCrash'
 
@@ -262,7 +263,14 @@ export function __kfScrollJs<F>(id: string, fn: F): F {
     const o = e?.nativeEvent?.contentOffset
     if (o) {
       jsScrollLast[id] = [o.x, o.y, Date.now()]
-      for (const tap of jsScrollTaps) tap(id, o.x, o.y)
+      if (jsScrollTaps.size) {
+        enterInspector()
+        try {
+          for (const tap of jsScrollTaps) tap(id, o.x, o.y)
+        } finally {
+          leaveInspector()
+        }
+      }
     }
     return (fn as unknown as (...a: unknown[]) => unknown).apply(this, arguments as unknown as unknown[])
   }
@@ -903,7 +911,12 @@ export function tapTouches(fn: (t: TouchReport) => void): () => void {
 }
 
 export function emitTouch(t: TouchReport): void {
-  for (const fn of touchTaps) fn(t)
+  enterInspector()
+  try {
+    for (const fn of touchTaps) fn(t)
+  } finally {
+    leaveInspector()
+  }
 }
 
 // ─── Navigation ───────────────────────────────────────────────────────────────────
@@ -911,13 +924,27 @@ export function emitTouch(t: TouchReport): void {
 // and one that starts later learns where it started.
 
 export type NavigationReport = { route: string; params?: Record<string, unknown> }
-type NavShared = { __KF_NAV__?: { current: NavigationReport | null; listeners: Set<(n: NavigationReport) => void> } }
+type NavShared = { __KF_NAV__?: { current: NavigationReport | null; key?: string; listeners: Set<(n: NavigationReport) => void> } }
 const nav = ((globalThis as NavShared).__KF_NAV__ ??= { current: null, listeners: new Set() })
 
-export function emitNavigation(n: NavigationReport): void {
-  if (nav.current?.route === n.route) return
+/**
+ * A screen change. `key` is the navigator's own id for the screen (React Navigation's route key), when
+ * there is one. The same screen said again (a container fires `state` more than once per change) is
+ * one marker; two screens of one name (`[id]` with other params, expo-router's `index` in two folders)
+ * are two: told apart by their key, else by their params.
+ */
+export function emitNavigation(n: NavigationReport, key?: string): void {
+  const same = key !== undefined ? nav.key === key : nav.key === undefined && JSON.stringify(nav.current?.params ?? null) === JSON.stringify(n.params ?? null)
+  if (nav.current?.route === n.route && same) return
   nav.current = n
-  for (const fn of nav.listeners) fn(n)
+  nav.key = key
+  // What listens (a recording's markers, which screens are covered) is the inspector's own work.
+  enterInspector()
+  try {
+    for (const fn of nav.listeners) fn(n)
+  } finally {
+    leaveInspector()
+  }
 }
 
 export function tapNavigation(fn: (n: NavigationReport) => void): () => void {
@@ -1366,9 +1393,15 @@ export type InspectorOptions = {
 
 /** A JS-thread inspector: reports every animation and signal and applies live overrides. */
 export function createInspector({ send: deliver, now = () => Date.now() }: InspectorOptions) {
+  // Reporting is the inspector's own work on the JS thread (ownTime.ts): queueing, the stack, the taps.
   const send = (event: InspectorEvent) => {
-    deliver(event)
-    for (const tap of taps) tap(event)
+    enterInspector()
+    try {
+      deliver(event)
+      for (const tap of taps) tap(event)
+    } finally {
+      leaveInspector()
+    }
   }
   let overrides: InspectorOverrides = {}
   let nextEid = 1
@@ -1387,11 +1420,18 @@ export function createInspector({ send: deliver, now = () => Date.now() }: Inspe
   const signals = new Map<string, { value: unknown }>()
   const hook: InspectorHook = {
     anim(fn, site, args) {
-      const next = applyOverrides(args, overrides[site.id])
+      // The inspector's part, not the animation the app asked for.
+      let next: unknown[]
       const eid = nextEid++
-      const reported = next.map((a) => (isRef(a) && animIds.has(a) ? { $anim: animIds.get(a)! } : a))
-      send({ kind: 'anim', eid, site, at: now(), args: reported, thread: 'js' })
-      if (site.prop) hintAnimationSite(site)
+      enterInspector()
+      try {
+        next = applyOverrides(args, overrides[site.id])
+        const reported = next.map((a) => (isRef(a) && animIds.has(a) ? { $anim: animIds.get(a)! } : a))
+        send({ kind: 'anim', eid, site, at: now(), args: reported, thread: 'js' })
+        if (site.prop) hintAnimationSite(site)
+      } finally {
+        leaveInspector()
+      }
       const result = fn(...next)
       if (isRef(result)) animIds.set(result, eid)
       return result

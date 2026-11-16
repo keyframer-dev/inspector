@@ -26,6 +26,7 @@ import 'package:flutter/widgets.dart';
 import 'call_site.dart';
 import 'controller.dart' show curveName;
 import 'navigation.dart';
+import 'own_time.dart';
 import 'protocol.dart';
 import 'runtime.dart';
 import 'widget_site.dart';
@@ -62,10 +63,12 @@ class KfScene {
 
   final Map<State, _Implicit> _implicit = Map.identity();
   final Set<State> _notApps = Set.identity();
+  // Per value, not per id: a value created again at the same id (its screen opened again) is another
+  // instance, and starts with nothing seen, hidden or pending.
   final Map<KfSignal, double> _last = Map.identity();
-  final Map<String, bool> _visible = {};
-  final Map<String, String> _pending = {};
-  final Set<String> _seenWidgets = {};
+  final Map<KfSignal, bool> _visible = Map.identity();
+  final Map<KfSignal, String> _pending = Map.identity();
+  final Set<KfSignal> _seenWidgets = Set.identity();
   // Every source an animated widget was seen listening to, kept across walks: whether that widget sat
   // in a scrollable when last seen. Its widget gone, a value is off screen (a lazy list unmounts the
   // rows it scrolled away) or detached, never its State's (which is still there).
@@ -98,7 +101,9 @@ class KfScene {
   }
 
   /// One look: a walk when the last one is old, then the values that moved. Never throws into the app.
-  void _tick() {
+  void _tick() => KfOwnTime.measure(_look);
+
+  void _look() {
     if (_stopped) return;
     try {
       // Between frames only: a walk mid-frame would see a tree being rebuilt.
@@ -195,6 +200,11 @@ class KfScene {
   @visibleForTesting
   void check() {
     final pages = kfPageContents();
+    // What values unregistered since (their screens closed) leave with them.
+    _last.removeWhere((s, _) => s.id == null);
+    _visible.removeWhere((s, _) => s.id == null);
+    _pending.removeWhere((s, _) => s.id == null);
+    _seenWidgets.removeWhere((s) => s.id == null);
     for (final s in runtime.signals.values.toList()) {
       final id = s.id;
       if (id == null) continue;
@@ -203,7 +213,7 @@ class KfScene {
       _last[s] = v;
       if (before == null || before == v || !v.isFinite) {
         // Stopped: what it seemed to move behind is not confirmed.
-        _pending.remove(id);
+        _pending.remove(s);
         continue;
       }
       final elements = _elementsOf(s);
@@ -219,10 +229,10 @@ class KfScene {
         reason = gone;
       } else if (elements.isEmpty) {
         // Its widgets were seen before and are all gone: it moves for nothing.
-        if (!_seenWidgets.contains(id)) continue;
+        if (!_seenWidgets.contains(s)) continue;
         reason = 'detached';
       } else {
-        _seenWidgets.add(id);
+        _seenWidgets.add(s);
         // Visible when one of its widgets is; not judged while its screen is in a transition.
         final reasons = [for (final e in elements) _hiddenBy(e, pages)];
         if (reasons.contains(null)) {
@@ -234,21 +244,21 @@ class KfScene {
         }
       }
       if (reason == null) {
-        _pending.remove(id);
-        if (_visible[id] == false) {
-          _visible[id] = true;
+        _pending.remove(s);
+        if (_visible[s] == false) {
+          _visible[s] = true;
           onVisibility(id, true, null);
         }
         _hints(s, elements, pages);
-      } else if (_visible[id] != false) {
+      } else if (_visible[s] != false) {
         // Hidden on two looks in a row while moving: what moved during a screen's last frames on show
         // (Flutter mutes a covered screen's tickers once it is covered) is not reported.
-        if (_pending[id] == reason) {
-          _pending.remove(id);
-          _visible[id] = false;
+        if (_pending[s] == reason) {
+          _pending.remove(s);
+          _visible[s] = false;
           onVisibility(id, false, reason);
         } else {
-          _pending[id] = reason;
+          _pending[s] = reason;
         }
       }
     }
@@ -453,7 +463,7 @@ class _Implicit {
 
   // Every change restarts it from 0: dismissed, then forward.
   void _onStatus(AnimationStatus status) {
-    if (status == AnimationStatus.forward && state.mounted) _report();
+    if (status == AnimationStatus.forward && state.mounted) KfOwnTime.measure(_report);
   }
 
   void _report() {

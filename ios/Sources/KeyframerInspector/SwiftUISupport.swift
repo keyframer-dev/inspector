@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import UIKit
 
@@ -32,6 +32,34 @@ import UIKit
         Inspector.shared?.frameworkChanged()
     }
 
+    /// `.keyframerScreen`: a named screen appeared (or appeared again).
+    public static func screen(_ id: UUID, appeared name: String) {
+        Registry.screens.appear(id, name: name)
+        Inspector.shared?.screensChanged()
+    }
+
+    /// `.keyframerScreen` given another name while shown.
+    public static func screen(_ id: UUID, renamed name: String) {
+        Registry.screens.rename(id, to: name)
+        Inspector.shared?.screensChanged()
+    }
+
+    public static func screenDisappeared(_ id: UUID) {
+        Registry.screens.disappear(id)
+        Inspector.shared?.screensChanged()
+    }
+
+    /// withKeyframerAnimation started, while recording: what it moves is watched, as signals of this
+    /// call site (`owner`), while it moves.
+    public static func animationBegan(_ stamp: AnyObject, file: String, line: Int, column: Int, owner: String) {
+        Inspector.shared?.animationBegan(ObjectIdentifier(stamp), site: .init(file: file, line: line, column: column, owner: owner))
+    }
+
+    /// The first signal what `stamp` started moved, for its anim event's target.
+    public static func movedSignal(of stamp: AnyObject) -> String? {
+        Inspector.shared?.movedSignal(of: ObjectIdentifier(stamp))
+    }
+
     /// The editor's speed (the `time` message): 1 normal, 0 paused.
     public static var timeScale: Double { Inspector.shared?.timeScale ?? 1 }
 
@@ -51,10 +79,10 @@ import UIKit
         Inspector.shared?.overrides(for: siteId)
     }
 
-    /// Reports one SwiftUI animation. `symbols`: the stack where it was started, when known
-    /// (`Thread.callStackSymbols` inside withKeyframerAnimation, while recording).
-    public static func report(site: InspectorCallSite, args: [JSONValue], durationMs: Double?, symbols: [String]?) {
-        Inspector.shared?.report(site: site, args: args, durationMs: durationMs, symbols: symbols)
+    /// Reports one SwiftUI animation. `stack`: where it was started, when known (taken inside
+    /// withKeyframerAnimation while recording, as return addresses; read off the main thread).
+    public static func report(site: InspectorCallSite, args: [JSONValue], durationMs: Double?, stack: CapturedStack?) {
+        Inspector.shared?.report(site: site, args: args, durationMs: durationMs, stack: stack)
     }
 }
 #endif

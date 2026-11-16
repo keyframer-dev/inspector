@@ -59,7 +59,7 @@ Click a segment to [tune it](tune-and-apply.md), or a track's name for its value
 
 ## Trace
 
-Every step in time order: animations with their stack, commits with why each component rendered, drops with what ran in them, gestures and logs. Search, and filter by kind, thread and file. Every step with a location opens in your editor; so does Cmd-click on a timeline dot.
+Every step in time order: animations with their stack, commits with why each component rendered, drops with what ran in them (and how long the inspector itself worked there), gestures and logs. Search, and filter by kind, thread and file. Every step with a location opens in your editor; so does Cmd-click on a timeline dot.
 
 ## Problems
 

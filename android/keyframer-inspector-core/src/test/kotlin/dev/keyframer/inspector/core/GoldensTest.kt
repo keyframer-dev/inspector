@@ -87,7 +87,8 @@ class GoldensTest {
         "samples" to AppMessage.Samples(
             samples = listOf(Sample("dev/keyframer/example/MainActivity.kt:80:0:cardX", 16, 12.5), Sample("${site.id}:time", 16, 250.0)),
             frames = listOf(FrameStat(250, "js", 118, 2)),
-            drops = listOf(FrameDrop(400, "js", 25.1, 2)),
+            // The second one, in good part the inspector's own work.
+            drops = listOf(FrameDrop(400, "js", 25.1, 2), FrameDrop(480, "js", 33.4, 3, inspectorMs = 6.2)),
             markers = listOf(
                 Marker.Navigation(0, "MainActivity"),
                 Marker.Navigation(10, "detail", linkedMapOf("id" to 7)),

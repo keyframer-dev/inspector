@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import QuartzCore
 import UIKit
 
@@ -9,9 +9,14 @@ struct LayerNaming: Hashable {
     var name: String
     var owner: String?
 
+    /// `ViewController.card`: the layer, before any key path.
+    var base: String {
+        "\(owner.map { "\($0)." } ?? "")\(name)"
+    }
+
     /// The signal id of one scalar track of this layer: `ViewController.card/position.x`.
     func id(_ path: String) -> String {
-        "\(owner.map { "\($0)." } ?? "")\(name)/\(path)"
+        "\(base)/\(path)"
     }
 }
 
@@ -60,15 +65,18 @@ struct LayerNaming: Hashable {
 
     func track(_ id: String) -> Track? { tracks[id] }
 
-    /// Registers one scalar track. Returns its site when the id is new (to report to the panel).
-    func ensure(layer: CALayer, path: String, naming: LayerNaming, file: String, line: Int, kind: InspectorSignalSite.Kind? = nil) -> InspectorSignalSite? {
+    /// Registers one scalar track. Returns its site when the id is new (to report to the panel). A key
+    /// path the layer cannot read back as a number is no signal: it would never get a sample, and its
+    /// visibility markers would have no track to go on.
+    func ensure(layer: CALayer, path: String, naming: LayerNaming, file: String, line: Int, column: Int? = nil, kind: InspectorSignalSite.Kind? = nil, prop: String? = nil) -> InspectorSignalSite? {
         let id = naming.id(path)
         if let existing = tracks[id] {
             if existing.layer !== layer { tracks[id] = Track(layer: layer, path: path, site: existing.site) }
             return nil
         }
+        guard LayerValue.number((layer.presentation() ?? layer).value(forKeyPath: path)) != nil else { return nil }
         // Every track is writable: pins can hold any animatable key path, scroll offsets scroll the view.
-        let site = InspectorSignalSite(id: id, file: file, line: line, component: naming.owner, name: "\(naming.name).\(path)", kind: kind)
+        let site = InspectorSignalSite(id: id, file: file, line: line, column: column, component: naming.owner, name: "\(naming.name).\(path)", kind: kind, prop: prop)
         tracks[id] = Track(layer: layer, path: path, site: site)
         order.append(id)
         return site
@@ -176,8 +184,11 @@ struct LayerNaming: Hashable {
         return nil
     }
 
+    /// The class's name without generic arguments: `UIHostingController`, not
+    /// `UIHostingController<ModifiedContent<AnyView, RootModifier>>`.
     static func typeName(_ object: AnyObject) -> String {
-        String(describing: type(of: object))
+        let name = String(describing: type(of: object))
+        return name.firstIndex(of: "<").map { String(name[..<$0]) } ?? name
     }
 }
 #endif

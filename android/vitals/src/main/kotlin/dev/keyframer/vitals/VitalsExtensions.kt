@@ -1,5 +1,6 @@
 package dev.keyframer.vitals
 
+import dev.keyframer.vitals.internal.LazySite
 import dev.keyframer.vitals.internal.Recorder
 import dev.keyframer.vitals.internal.Redact
 import dev.keyframer.vitals.internal.StackSites
@@ -36,6 +37,18 @@ object VitalsExtensions {
     /** The site of a call: `name` when given, else the first app frame of `stack`. */
     fun site(stack: Array<StackTraceElement>, name: String?, fn: String, prop: String? = null): VitalsSite? =
         StackSites.site(stack, name?.let { Redact.maskText(it) }, fn, prop, KeyframerVitals.keepClassNames)?.let { VitalsSite(it) }
+
+    /**
+     * The site of the call this is made from, read the first time the returned function is called: its
+     * stack is recorded now (`Throwable()`, a fraction of reading it) and read then, or never for a named
+     * call in a build without class names, whose name is its whole site. Call it only when a run starts
+     * and the session measures. Main thread.
+     */
+    fun siteHere(name: String?, fn: String, prop: String? = null): () -> VitalsSite? {
+        val lazy = LazySite.of(name, fn, prop)
+        var made: VitalsSite? = null
+        return { made ?: lazy.get()?.let { VitalsSite(it) }.also { made = it } }
+    }
 
     /** A run started; `durationMs` its estimated length, null when it runs until stopped. */
     fun start(site: VitalsSite, durationMs: Double?): VitalsRun? =

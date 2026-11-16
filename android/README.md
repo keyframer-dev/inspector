@@ -21,8 +21,10 @@ keyframer-inspector-core/   pure Kotlin (JVM), no Android: tested with ./gradlew
                             time, render hints, reconnect
   CallSites.kt              first app frame of a JVM stack: file, line, component (composables and their lambdas too)
   FrameMeter.kt             port of frameMeter.ts, counting against the display's rate when it is known
+  OwnTime.kt                port of ownTime.ts: the inspector's own main-thread work, for a long frame's inspectorMs
   TimeClock.kt              animation time under the editor's speed: scaled, held, stepped, never jumping
   Visibility.kt             visibility markers from checks of tracked views, and their reasons
+  ScreenRoutes.kt           what each activity is called: declared screens, the route the app set, its name
   Devices.kt                what the hello says about the device, from Build fields and getprop output
   OkHttpSockets.kt          WebSocket transport
 keyframer-inspector/        Android library (minSdk 24)
@@ -36,12 +38,13 @@ keyframer-inspector/        Android library (minSdk 24)
   AndroidHost.kt            activities, touches, navigation markers, app state, display and motion settings,
                             PixelCopy screenshots, navigating back
   KeyframerExtensions.kt    what keyframer-inspector-compose reaches the session through (opt-in, not app API)
-  Platform.kt               main thread scheduler, clock, Choreographer frame loop
+  Platform.kt               main thread scheduler, clock, Choreographer frame loop, the worker that reads stacks
   TouchCallback.kt          Window.Callback wrapper that sees every touch
   src/androidTest/          instrumented tests: time on each kind of animator, render hints, visibility, the device
 keyframer-inspector-noop/   what release builds link: Keyframer's API with empty bodies, no dependencies
 keyframer-inspector-compose/       Jetpack Compose (opt-in): tracked animate*AsState, Animatable, updateTransition,
-                                   rememberInfiniteTransition, and Compose's frame clock on the inspector's time
+                                   rememberInfiniteTransition, screen names (KfScreen, KfNavigation), and
+                                   Compose's frame clock on the inspector's time
 keyframer-inspector-compose-noop/  its release stand-in: the same functions, each Compose's own
 example/                    an entrance, a loop, a drag, a second screen, a Compose screen and four scenarios
                             (debug: the libraries; release: the no-ops)
@@ -56,9 +59,9 @@ the oldest the Compose module supports. `ANDROID_HOME` must point at the SDK (or
 with `sdk.dir`).
 
 ```sh
-./gradlew test                    # 82 JVM tests: protocol goldens, parsing, call sites, frame meter, time clock,
-                                  # visibility, device rules, session, relay end to end
-./gradlew :keyframer-inspector:connectedDebugAndroidTest   # 13 tests on a device or emulator (every connected
+./gradlew test                    # 103 JVM tests: protocol goldens, parsing, call sites, frame meter, own time,
+                                  # time clock, visibility, screen routes, device rules, session, relay end to end
+./gradlew :keyframer-inspector:connectedDebugAndroidTest   # 18 tests on a device or emulator (every connected
                                   # one: ANDROID_SERIAL=<serial> picks one)
 ./gradlew :example:assembleDebug  # the example APK (assembleRelease: the same app on the no-ops)
 ./gradlew publishToMavenLocal     # every module, signed (keys from ~/.gradle/gradle.properties)
@@ -78,7 +81,8 @@ otherwise). After changing a message: `./gradlew :keyframer-inspector-core:test 
 
 2. Install and open the example. On the emulator it connects to `ws://10.0.2.2:8790` by itself. On a
    device run `adb reverse tcp:8790 tcp:8790` (it uses 127.0.0.1 there), or build with
-   `-Pkeyframer.host=<LAN IP>` and add that IP to `network_security_config.xml`.
+   `-Pkeyframer.host=<LAN IP>` and add that IP to `network_security_config.xml`. That property is the
+   example's own wiring (into BuildConfig, then `KeyframerConfig(host = ...)`), not the library's.
 
    ```sh
    ./gradlew :example:installDebug
@@ -113,8 +117,8 @@ otherwise). After changing a message: `./gradlew :keyframer-inspector-core:test 
 
 ```kotlin
 // build.gradle.kts
-debugImplementation("dev.keyframer:keyframer-inspector:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.2.0")   // same API, does nothing, no OkHttp
+debugImplementation("dev.keyframer:keyframer-inspector:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-noop:0.3.0")   // same API, does nothing, no OkHttp
 
 // Application.onCreate
 Keyframer.start(this)                                   // debuggable builds only, unless enableInRelease
@@ -129,7 +133,8 @@ ValueAnimator.ofFloat(1f, 1.3f).apply { addUpdateListener { ... } }.kfTrack("pul
 // Anything else that moves: a drag, a scroll offset, a progress (the view is optional, for visibility)
 Keyframer.signal("cardX", card, read = { card.translationX }, write = { card.translationX = it })
 
-// Screens that are not activities (fragments, Navigation)
+// Screens that are not activities (fragments, Navigation). The name stays with the activity on top:
+// it comes back with it from the background or from behind a dialog.
 navController.addOnDestinationChangedListener { _, d, _ -> Keyframer.setRoute(d.route ?: d.label.toString()) }
 Keyframer.setNavigator { route, _ -> navController.navigate(route); true }
 
@@ -140,12 +145,43 @@ Keyframer.registerScenario("drag card") { done -> runTheDrag(); done(null) }
 The relay is plain `ws://`, so the app must allow cleartext to that host only (see
 `example/src/main/res/xml/network_security_config.xml`).
 
+Helpers: a function of your own that wraps `kfTrack` or `kfAnimate*AsState` (a `fadeIn(view)`, a
+`rememberPress()`) makes every value it animates the helper's own line. Put its package in
+`KeyframerConfig(libraryPrefixes = listOf("com.acme.motion."))`: the call site is then the line that
+called the helper, and the helper's frames are collapsed in the trace.
+
+### Start it only when asked
+
+The inspector costs something while it runs (a connection, a stack at each tracked call site, read off
+the main thread when it can wait, frame callbacks and samples while recording), and a debug build is
+what people install on their own phone.
+Start it behind a flag, so a debug build connects only when you build it to. The example app passes
+its relay host the same way, a Gradle property into BuildConfig:
+
+```kotlin
+// build.gradle.kts
+android {
+    defaultConfig {
+        // ./gradlew installDebug -Pkeyframer=true
+        buildConfigField("boolean", "KEYFRAMER", "${findProperty("keyframer") == "true"}")
+    }
+    buildFeatures { buildConfig = true }
+}
+
+// Application.onCreate
+if (BuildConfig.KEYFRAMER) Keyframer.start(this)
+```
+
+`-Pkeyframer.host` and `-Pkeyframer.port` work the same way in the example (into
+`KeyframerConfig(host = ..., port = ...)`): they are the example's wiring, and the library reads no
+Gradle property.
+
 ### Jetpack Compose
 
 ```kotlin
 // build.gradle.kts: these replace the two lines above (each brings its base module)
-debugImplementation("dev.keyframer:keyframer-inspector-compose:0.2.0")
-releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.2.0")
+debugImplementation("dev.keyframer:keyframer-inspector-compose:0.3.0")
+releaseImplementation("dev.keyframer:keyframer-inspector-compose-noop:0.3.0")
 
 // The same calls with kf in front: the same parameters, the same behaviour
 val height by kfAnimateDpAsState(if (open) 200.dp else 110.dp, spring(dampingRatio = 0.6f), label = "height")
@@ -154,10 +190,23 @@ val card = kfUpdateTransition(open, label = "card")          // children: Compos
 val pulse = rememberKfInfiniteTransition(label = "pulse")     // children: Compose's own animateFloat...
 val x = rememberKfAnimatable(0f, label = "ballX")
 scope.launch { x.kfAnimateTo(0f, spring(dampingRatio = 0.35f)) }
+
+// Screens: names the screen while it is composed, for apps with one activity
+KfScreen("Settings")
+// Navigation: every destination by its route pattern (product/{id}), once, next to the NavHost
+KfNavigation(navController)
 ```
 
 Nothing else to set up: `Keyframer.start` finds the module, the hello then says `framework: "compose"`,
 and every Compose window runs on the inspector's animation time (see Time, below).
+
+`KfScreen(name)` declares a screen while it is in the composition: the most recently composed
+`KfScreen` still composed is the route in navigation markers. When it leaves, the one under it is the
+route again (the `KfScreen` before it, else what `Keyframer.setRoute` set, else the activity's name).
+A new `name` renames it in place, and one screen leaving as the next enters, in the same frame, is one
+marker. `KfNavigation` calls `Keyframer.setRoute` on each destination change (it needs
+androidx.navigation, which the app brings); a `KfScreen` inside a destination names the screen over
+it.
 
 Release builds: the no-op module has the same functions, each one Compose's own call
 (`kfAnimateFloatAsState` is `animateFloatAsState`), on keyframer-inspector-noop. A separate artifact
@@ -167,11 +216,20 @@ on the missing classes.
 
 ## How Android maps onto the protocol
 
-- **Call sites.** `Throwable().stackTrace` at `track()` / `signal()`: the first frame outside the SDK,
-  the platform and libraries (`CallSites.libraryPrefixes`, plus `KeyframerConfig.libraryPrefixes`).
+- **Call sites.** The stack at `track()` / `signal()`: the first frame outside the SDK,
+  the platform and libraries (`CallSites.libraryPrefixes`, plus `KeyframerConfig.libraryPrefixes`,
+  which an animator's start and the frames of a trace skip and collapse the same way).
   `file` is the package as folders plus the file name (`dev/keyframer/example/MainActivity.kt`),
   `column` is 0 (JVM frames have no column), `component` is the outer class, or the function for a
-  top-level function (how a composable will be named).
+  top-level function (how a composable will be named). A stack is two steps on Android: `Throwable()`
+  records the frames (about 6 µs in a Compose click handler, 65 frames deep, on an API 35 emulator) and
+  `stackTrace` makes an element of each, file and line included (about 35 µs more). `track()` does the
+  first; the second runs on a worker thread at background priority, and the animator is registered
+  when it comes back, a millisecond or so later, with any start in between reported at the time it
+  happened. It is read at once when something needs the ids within the frame: a recording (its values
+  are sampled from the next frame), the panel's overrides (they apply before it starts) or a speed
+  other than 1 (it is held from its first frame). `signal()` reads it at once: its id is part of what
+  it returns.
 - **Hello.** `platform: "android"`, `framework: "android-views"` (`"compose"` with the Compose module),
   `osVersion`, `protocol: 1`, `sdk: { name: "keyframer-inspector", version }`,
   `threads: { js: { label: "Main", animates: true } }`, `capabilities: ["capture", "playback",
@@ -193,7 +251,10 @@ on the missing classes.
   understand it: `{ duration, delay, iterationCount, direction, interpolator, values: { alpha: [0, 1] } }`.
   `params` are `duration`, `startDelay` and `repeatCount`: the panel's live overrides apply to them on
   the next start. `durationMs` is the delay plus every repeat (left out for an infinite animator).
-  While recording, events carry `t` and `frames` (the stack, resolved on the device).
+  While recording, events carry `t` and `frames` (the stack, resolved on the device). The stack is
+  taken only then: a start while nobody records takes none, so the inspector does not add the frame
+  drops it measures. While recording it is read and made into frames on the worker thread, and the
+  event follows with the time the start happened.
 - **Recorders.** `record` carries an optional `recorder` id: the app keeps the recorders that are on
   and records while any is, over the union of their ids, so one editor stopping does not stop
   another. Requests without an id share one anonymous recorder. Every recorder goes when the last
@@ -217,6 +278,16 @@ on the missing classes.
   it is left out of `threads` until it is measured (FrameMetrics or JankStats, a next step). Samples are
   read just after each frame (a message posted at the front of the queue from the frame callback), so a
   sample holds what that frame showed.
+- **The inspector's own time.** A drop carries `inspectorMs` when the inspector itself worked 0.5 ms
+  or more on the main thread during that frame (rounded to 0.1 ms, never more than the frame): the
+  analysis leaves a drop that would not have been one without it out of the app's drops. Every entry
+  point times itself (core's `OwnTime`, a port of ownTime.ts): animator listeners, the frame loop and
+  its sampling, visibility checks, navigation and touch markers, the editor's messages, flushing and
+  encoding, Compose's trackers, `kfAnimateTo` and the stacks that are taken on the main thread.
+  Sections nest and only the outermost counts; app code the inspector runs on request (a scenario,
+  replay, the app's navigator) does not. The frame meter reads the running total at each frame
+  callback, so that callback's own work (the sampling after it) counts toward the next frame. Nothing
+  is timed while nobody records.
 - **Display.** `display: { hz, adaptive }`: the highest rate among the default display's modes at its
   resolution (`Display.getSupportedModes`), `adaptive` when there are several. Frames are counted
   against the current `Display.getRefreshRate()` (rounded to whole hertz) instead of a guess from the
@@ -254,8 +325,10 @@ on the missing classes.
   `detached` (not in a window), `covered` (its window is not shown: another activity on top),
   `hidden` (`isShown` false, or it or a parent at alpha 0; a view whose own alpha animates is not hidden
   at 0, that is its fade), `offscreen` (`getGlobalVisibleRect` false: outside the window or clipped
-  away). Each change is a `visibility` marker for the view's value signals. In the background nothing
-  is checked: that is the `appState` marker.
+  away). Each change is a `visibility` marker for the view's value signals that the recording has
+  samples of: ones an editor records and that read as numbers (an `ofObject` animator's value never
+  does). A value that stops being recorded, or whose view is no longer tracked, starts out visible
+  again if it comes back. In the background nothing is checked: that is the `appState` marker.
 - **Render hints.** Read on the first frame of each start of a tracked animator, sent once per signal
   and hint, and kept with the catalog for editors that join later (Compose has none yet):
   - `layer-alpha`: alpha animates on a view with overlapping rendering and no hardware layer.
@@ -267,8 +340,13 @@ on the missing classes.
     (`FLAG_BLUR_BEHIND`, API 31+). A view's own `RenderEffect` has no getter, so it cannot be seen.
 - **Compose.** The tracked functions find their call site once, from the stack of their first
   composition: the composable that called them is the component (a lambda inside it too; one Compose
-  hoisted into `ComposableSingletons` is named after its file). `animate*AsState` and `kfAnimateTo`
-  report an `anim` on every start, `fn` the Compose name (`animateFloatAsState`,
+  hoisted into `ComposableSingletons` is named after its file). No stack is taken while the inspector
+  is not running. `kfAnimateTo` finds its call site on every call (one Animatable can be animated from
+  several places), and reuses what it made for that call site after the first: it records the stack
+  (`Throwable()`) and reads it on the worker thread, reporting the call when it comes back with the
+  values it started from, unless the panel has live overrides (they may be for this call, whose spec
+  must change now). `animate*AsState` and
+  `kfAnimateTo` report an `anim` on every start, `fn` the Compose name (`animateFloatAsState`,
   `Animatable.animateTo`), `target` the label, `args` the spec as `{ type: "tween" | "spring" |
   "keyframes" | "snap" | "repeatable" | "infiniteRepeatable", duration, delay, easing, dampingRatio,
   stiffness, iterationCount, direction, values: { label: [from, to] } }`, and `durationMs` from
@@ -282,9 +360,11 @@ on the missing classes.
   finishing, so recorded samples still find their values.
 - **Touches and screens.** A `Window.Callback` wrapper on every activity window sends `touch`
   markers (start, move at most every 8 ms per finger, end, cancel) in dp screen coordinates, timed by
-  the event. Each resumed activity is a `navigation` marker (or what `setRoute` set), and the app going
-  to the background and back is `appState` (`background` / `active`). Playback and capture navigate
-  back to an activity by name (`FLAG_ACTIVITY_CLEAR_TOP` when it is still in the stack).
+  the event. Each resumed activity is a `navigation` marker named, in order, by the newest `KfScreen`
+  composed in it, the route `setRoute` set for it (kept per activity, so a resume after the background
+  or a permission dialog keeps it), or its class name; the app going to the background and back is
+  `appState` (`background` / `active`). Playback and capture navigate back to an activity by name
+  (`FLAG_ACTIVITY_CLEAR_TOP` when it is still in the stack).
 - **Capture.** `PixelCopy` of the top window (a software draw below API 26), scaled to `width` and
   encoded off the main thread.
 - **Replay.** Re-creates the top activity, which re-runs its entrances, unless the app registered its own.

@@ -2,12 +2,29 @@ import 'package:flutter/animation.dart';
 import 'package:flutter/foundation.dart';
 
 import 'call_site.dart';
+import 'own_time.dart';
 import 'protocol.dart';
 import 'runtime.dart';
 
-/// Whether values capture where they were created. On in debug and profile; in release only when the
-/// inspector is enabled there.
-bool kfCaptureSites = !kReleaseMode;
+/// Whether the inspector runs when the app does not say (`enabled:`): in debug and profile builds, not
+/// in release. `--dart-define=KEYFRAMER_INSPECTOR=true` turns it on in any build, and `=false` off in
+/// any build (no connection, and no call sites captured).
+bool get kfInspectorDefaultEnabled => kfInspectorEnabledBy(_kfInspectorDefine, release: kReleaseMode);
+
+const _kfInspectorDefine = String.fromEnvironment('KEYFRAMER_INSPECTOR');
+
+/// [kfInspectorDefaultEnabled] for a `KEYFRAMER_INSPECTOR` value (empty when it is not defined).
+@visibleForTesting
+bool kfInspectorEnabledBy(String define, {required bool release}) => switch (define.trim().toLowerCase()) {
+  'true' => true,
+  'false' => false,
+  _ => !release,
+};
+
+/// Whether values capture where they were created (a stack trace each, read only once an inspector is
+/// installed): when the inspector is on by default, and from when an app turns it on with `enabled:`.
+/// Turned off with it.
+bool kfCaptureSites = kfInspectorDefaultEnabled;
 
 /// An AnimationController the inspector sees: its value is a signal (sampled while recording, written
 /// by playback) located where it was constructed, and every start (forward, reverse, animateTo,
@@ -27,7 +44,9 @@ class KfAnimationController extends AnimationController {
     required super.vsync,
     String? name,
   }) : _vsync = vsync {
-    _kf = _KfTracker(this, name ?? debugLabel, kfCaptureSites ? StackTrace.current : null, owner: _vsync);
+    _kf = KfOwnTime.measure(
+      () => _KfTracker(this, name ?? debugLabel, kfCaptureSites ? StackTrace.current : null, owner: _vsync),
+    );
   }
 
   late final _KfTracker _kf;
@@ -201,7 +220,7 @@ extension KfTrackNotifier on ValueNotifier<double> {
       read: () => value,
       write: (v) => value = v,
       name: name,
-      frame: _creationFrame(kfCaptureSites ? StackTrace.current : null),
+      created: kfCaptureSites ? StackTrace.current : null,
       fallbackKey: name,
     );
     _trackedNotifiers[this] = s;
@@ -220,11 +239,8 @@ final _tracked = Expando<_KfStatusTracker>('kfTracked');
 final _trackedNotifiers = Expando<KfSignal>('kfTrackedNotifier');
 int _unnamed = 0;
 
-KfStackFrame? _creationFrame(StackTrace? trace) => trace == null ? null : appFrame(parseStackTrace(trace.toString()));
-
 class _KfTracker {
   _KfTracker(this.controller, this.name, StackTrace? created, {Object? owner}) {
-    final frame = _creationFrame(created);
     signal = KfSignal(
       source: controller,
       owner: owner,
@@ -234,7 +250,7 @@ class _KfTracker {
         if (!_disposed) controller.value = v;
       },
       name: name,
-      frame: frame,
+      created: created,
       fallbackKey: name ?? 'controller${++_unnamed}',
       beginPlayback: _beginPlayback,
       endPlayback: _endPlayback,
@@ -252,6 +268,12 @@ class _KfTracker {
   TickerFuture Function()? _last;
   TickerFuture Function()? _deferred;
 
+  // The start sites seen so far, by where their app frame is: a call that runs again (a loop
+  // restarted, the same button tapped twice) works its id, file and component out once. Dropped
+  // when the runtime's appPackage or root change, which they are relative to.
+  final Map<String, (String, String, String?)> _starts = {};
+  String? _startsPackage, _startsRoot;
+
   TickerFuture start(
     String fn,
     List<Object?> Function() args,
@@ -267,31 +289,56 @@ class _KfTracker {
       _last = () => run(null);
       return run(null);
     }
-    final frames = parseStackTrace(StackTrace.current.toString());
-    final site = _callSite(rt, fn, appFrame(frames), duration, params);
-    final sitePatch = rt.overrides[site.id];
-    if (sitePatch != null) onPatch?.call(sitePatch);
-    final patch = sitePatch?[loops ? '0.period' : '1.duration'];
-    final overridden = patch != null ? Duration(microseconds: (patch * 1000).round()) : null;
-    var reported = args();
-    if (overridden != null) reported = _patchDuration(reported, _ms(overridden), loops);
-    TickerFuture go() {
-      // Measured when it starts (a deferred start runs from where playback left the value). Loops,
-      // flings and unknown durations have none.
-      rt.reportAnim(site, reported, frames: frames, durationMs: runMs?.call(overridden));
-      return run(overridden);
-    }
+    return KfOwnTime.measure(() {
+      // The stack of this call: its first app frame is the call site, the frames past it are read only
+      // for a recording. Taking it costs a few µs; printing it ten times that and more (every frame, 60
+      // to 150 from a gesture handler or a build), so it is printed when the site is first read: by the
+      // next batch, between frames (KfInspectorClient.flush), unless one of the panel's edits could apply
+      // to this call, which needs its site now.
+      final frames = KfLazyStack.of(StackTrace.current);
+      final value = signal.id;
+      KfCallSite locate() => _callSite(rt, fn, frames.appFrame, duration, params, value);
+      final KfCallSite site;
+      Map<String, num>? sitePatch;
+      if (_mayOverride(rt.overrides, loops, params)) {
+        site = locate();
+        sitePatch = rt.overrides[site.id];
+      } else {
+        site = _LateCallSite(locate);
+      }
+      if (sitePatch != null) onPatch?.call(sitePatch);
+      final patch = sitePatch?[loops ? '0.period' : '1.duration'];
+      final overridden = patch != null ? Duration(microseconds: (patch * 1000).round()) : null;
+      var reported = args();
+      if (overridden != null) reported = _patchDuration(reported, _ms(overridden), loops);
+      TickerFuture go() {
+        // Measured when it starts (a deferred start runs from where playback left the value). Loops,
+        // flings and unknown durations have none.
+        rt.reportAnim(site, reported, frames: frames, durationMs: runMs?.call(overridden));
+        // The controller's own start (and its status listeners) is the app's time, not the inspector's.
+        return KfOwnTime.notOurs(() => run(overridden));
+      }
 
-    _last = go;
-    // Playback owns the value: what the app starts meanwhile waits until it ends.
-    if (_inPlayback) {
-      _deferred = go;
-      return TickerFuture.complete();
-    }
-    return go();
+      _last = go;
+      // Playback owns the value: what the app starts meanwhile waits until it ends.
+      if (_inPlayback) {
+        _deferred = go;
+        return TickerFuture.complete();
+      }
+      return go();
+    });
   }
 
-  KfCallSite _callSite(KfRuntime rt, String fn, KfStackFrame? at, Duration? duration, List<KfParam> extra) {
+  /// `value`: the value's id when the call started (a site worked out later still names the instance
+  /// that started it, when the stack has no app frame).
+  KfCallSite _callSite(
+    KfRuntime rt,
+    String fn,
+    KfStackFrame? at,
+    Duration? duration,
+    List<KfParam> extra,
+    String? value,
+  ) {
     final params = [
       if (duration != null) KfParam(fn == 'repeat' ? '0.period' : '1.duration', _ms(duration)!),
       ...extra,
@@ -299,7 +346,7 @@ class _KfTracker {
     if (at == null) {
       // No symbolic stack (--split-debug-info, --obfuscate): one site per value and command.
       return KfCallSite(
-        id: '${signal.id ?? signal.baseKey}#$fn',
+        id: '${value ?? signal.baseKey}#$fn',
         file: signal.site(rt).file,
         line: signal.site(rt).line,
         column: 0,
@@ -309,14 +356,23 @@ class _KfTracker {
         params: params,
       );
     }
-    final file = sourceFile(at.uri, appPackage: rt.appPackage, root: rt.root);
+    if (_startsPackage != rt.appPackage || _startsRoot != rt.root) {
+      _starts.clear();
+      _startsPackage = rt.appPackage;
+      _startsRoot = rt.root;
+    }
+    final (id, file, component) =
+        _starts['${at.uri}:${at.line}:${at.column}'] ??= () {
+          final file = sourceFile(at.uri, appPackage: rt.appPackage, root: rt.root);
+          return ('$file:${at.line}:${at.column}', file, componentOf(at.member));
+        }();
     return KfCallSite(
-      id: '$file:${at.line}:${at.column}',
+      id: id,
       file: file,
       line: at.line,
       column: at.column,
       fn: fn,
-      component: componentOf(at.member),
+      component: component,
       target: name,
       params: params,
     );
@@ -360,7 +416,7 @@ class _KfStatusTracker {
         if (!_disposed) controller.value = v;
       },
       name: name,
-      frame: _creationFrame(created),
+      created: created,
       fallbackKey: name ?? 'controller${++_unnamed}',
       beginPlayback: () {
         if (!_disposed) controller.stop(canceled: false);
@@ -382,6 +438,10 @@ class _KfStatusTracker {
     if (was == status) return;
     final rt = KfRuntime.instance;
     if (!rt.active) return;
+    KfOwnTime.measure(() => _report(rt, status));
+  }
+
+  void _report(KfRuntime rt, AnimationStatus status) {
     final s = signal.site(rt);
     final fn = status == AnimationStatus.forward ? 'forward' : 'reverse';
     final d =
@@ -413,6 +473,59 @@ class _KfStatusTracker {
     controller.removeStatusListener(_onStatus);
     KfRuntime.instance.unregister(signal);
   }
+}
+
+/// Whether one of the panel's edits holds a param this start reads (its duration or period, its own
+/// params): only then is its site needed while it starts. Any other edit would change nothing here.
+bool _mayOverride(Map<String, Map<String, num>> overrides, bool loops, List<KfParam> params) {
+  if (overrides.isEmpty) return false;
+  final key = loops ? '0.period' : '1.duration';
+  for (final patch in overrides.values) {
+    if (patch.containsKey(key)) return true;
+    for (final p in params) {
+      if (patch.containsKey(p.path)) return true;
+    }
+  }
+  return false;
+}
+
+/// A start's call site, worked out from its stack when it is first read (see _KfTracker.start). The
+/// same site, field for field, as one worked out at the start.
+class _LateCallSite implements KfCallSite {
+  _LateCallSite(this._locate);
+
+  KfCallSite Function()? _locate;
+  KfCallSite? _site;
+
+  KfCallSite get _resolved {
+    final site = _site;
+    if (site != null) return site;
+    final located = KfOwnTime.measure(_locate!);
+    _locate = null;
+    _site = located;
+    return located;
+  }
+
+  @override
+  String get id => _resolved.id;
+  @override
+  String get file => _resolved.file;
+  @override
+  int get line => _resolved.line;
+  @override
+  int get column => _resolved.column;
+  @override
+  String get fn => _resolved.fn;
+  @override
+  String? get component => _resolved.component;
+  @override
+  String? get target => _resolved.target;
+  @override
+  String? get prop => _resolved.prop;
+  @override
+  List<KfParam> get params => _resolved.params;
+  @override
+  Map<String, Object?> toJson() => _resolved.toJson();
 }
 
 List<Object?> _patchDuration(List<Object?> args, num? ms, bool loops) {

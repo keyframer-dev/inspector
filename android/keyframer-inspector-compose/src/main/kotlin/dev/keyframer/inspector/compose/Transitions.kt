@@ -22,8 +22,7 @@ fun <S> kfUpdateTransition(targetState: S, label: String? = null): Transition<S>
     val transition = updateTransition(targetState, label)
     val context = LocalContext.current
     val tracker = remember(transition) {
-        val stack = Throwable().stackTrace
-        locate(stack)?.let { TransitionTracker(it, stack, label, transition).also { t -> t.ownedBy(context) } }
+        atCallSite { at, stack -> TransitionTracker(at, stack, label, transition).also { t -> t.ownedBy(context) } }
     }
     DisposableEffect(tracker) {
         tracker?.attach()
@@ -46,8 +45,7 @@ fun rememberKfInfiniteTransition(label: String = "InfiniteTransition"): Infinite
     val transition = rememberInfiniteTransition(label)
     val context = LocalContext.current
     val tracker = remember(transition) {
-        val stack = Throwable().stackTrace
-        locate(stack)?.let { InfiniteTracker(it, stack, label.takeIf { l -> l != "InfiniteTransition" }, transition).also { t -> t.ownedBy(context) } }
+        atCallSite { at, stack -> InfiniteTracker(at, stack, label.takeIf { l -> l != "InfiniteTransition" }, transition).also { t -> t.ownedBy(context) } }
     }
     DisposableEffect(tracker) {
         tracker?.attach()

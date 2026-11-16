@@ -12,8 +12,19 @@ import java.lang.ref.WeakReference
  * coming back is seen. `animatesAlpha`: its own alpha is what animates, so alpha 0 is part of the
  * animation (a fade in starts there), not the view being hidden.
  */
-internal class ViewTarget(val ids: List<String>, view: View, val active: Boolean, val animatesAlpha: Boolean = false) {
+internal class ViewTarget(
+    override val ids: List<String>,
+    view: View,
+    override val active: Boolean,
+    val animatesAlpha: Boolean = false,
+) : VisibilityTracker.Target {
     val view = WeakReference(view)
+
+    override fun reason(): String? {
+        // A view that was collected is certainly not in a window any more.
+        val v = view.get() ?: return VisibilityTracker.Reasons.DETACHED
+        return reasonFor(v, animatesAlpha)
+    }
 }
 
 /**
@@ -21,11 +32,13 @@ internal class ViewTarget(val ids: List<String>, view: View, val active: Boolean
  * (detached, covered by another screen, hidden, alpha 0, outside the window or clipped away) and when it
  * is visible again: values that keep moving meanwhile spend frames nobody sees. Each check walks a
  * view's parents once (getGlobalVisibleRect), so it costs little next to a frame; only views whose
- * animation runs are checked. Main thread.
+ * animation runs are checked, and only for the values `sampled` says the recording has samples of
+ * (recorded, and numbers). Main thread.
  */
 internal class VisibilityWatcher(
     private val targets: () -> List<ViewTarget>,
     private val foreground: () -> Boolean,
+    private val sampled: (String) -> Boolean,
     private val onMarker: (Marker) -> Unit,
 ) {
     companion object {
@@ -33,14 +46,13 @@ internal class VisibilityWatcher(
     }
 
     private val tracker = VisibilityTracker()
-    private val rect = Rect()
     private var running = false
 
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
             try {
-                check()
+                ownTime.time { check() }
             } catch (_: Throwable) {
                 // A view in a state that cannot be measured: checked again next time.
             }
@@ -63,37 +75,33 @@ internal class VisibilityWatcher(
     private fun check() {
         // The app in the background is an appState marker, not every view going away.
         if (!foreground()) return
-        val t = AndroidClock.nowMs().toLong()
-        val again = tracker.notVisible
-        for (target in targets()) {
-            if (!target.active && target.ids.none { it in again }) continue
-            val view = target.view.get() ?: continue
-            val reason = reasonFor(view, target.animatesAlpha)
-            for (id in target.ids) tracker.update(id, reason, t)?.let(onMarker)
-        }
+        tracker.check(AndroidClock.nowMs().toLong(), targets(), sampled).forEach(onMarker)
     }
+}
 
-    private fun reasonFor(view: View, animatesAlpha: Boolean): String? {
-        val attached = view.isAttachedToWindow
-        val windowVisible = attached && view.windowVisibility == View.VISIBLE
-        return VisibilityTracker.Reasons.of(
-            attached = attached,
-            windowVisible = windowVisible,
-            shown = view.isShown,
-            transparent = transparent(view, animatesAlpha),
-            onScreen = windowVisible && view.width > 0 && view.height > 0 && view.getGlobalVisibleRect(rect),
-        )
-    }
+/** Reused by every check: they all run on the main thread. */
+private val rect = Rect()
 
-    /** The view, or a parent, drawn at alpha 0. */
-    private fun transparent(view: View, animatesAlpha: Boolean): Boolean {
-        if (!animatesAlpha && view.alpha <= 0f) return true
-        var p = view.parent
-        var depth = 0
-        while (p is View && depth++ < 64) {
-            if (p.alpha <= 0f) return true
-            p = p.parent
-        }
-        return false
+private fun reasonFor(view: View, animatesAlpha: Boolean): String? {
+    val attached = view.isAttachedToWindow
+    val windowVisible = attached && view.windowVisibility == View.VISIBLE
+    return VisibilityTracker.Reasons.of(
+        attached = attached,
+        windowVisible = windowVisible,
+        shown = view.isShown,
+        transparent = transparent(view, animatesAlpha),
+        onScreen = windowVisible && view.width > 0 && view.height > 0 && view.getGlobalVisibleRect(rect),
+    )
+}
+
+/** The view, or a parent, drawn at alpha 0. */
+private fun transparent(view: View, animatesAlpha: Boolean): Boolean {
+    if (!animatesAlpha && view.alpha <= 0f) return true
+    var p = view.parent
+    var depth = 0
+    while (p is View && depth++ < 64) {
+        if (p.alpha <= 0f) return true
+        p = p.parent
     }
+    return false
 }

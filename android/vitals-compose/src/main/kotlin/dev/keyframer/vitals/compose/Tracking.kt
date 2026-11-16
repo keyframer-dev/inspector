@@ -17,7 +17,9 @@ import dev.keyframer.vitals.VitalsSite
 /*
  * How tracked Compose animations reach Motion Vitals. Each tracked call finds its call site once, from
  * the stack of its first composition (the composable that called it), and reports a run from each
- * start to its end (or its estimated end), so the frames drawn meanwhile count against it.
+ * start to its end (or its estimated end), so the frames drawn meanwhile count against it. The stack
+ * is recorded at the first composition and read at the first run in a session that measures: most
+ * sessions are not sampled, and rows of a list compose one after another as it scrolls.
  */
 
 /** One tracked call's runs: one at a time, a new start ends the one before. Main thread. */
@@ -39,7 +41,11 @@ internal class Runs(private val start: (Double?) -> Any?, private val end: (Any?
     }
 
     companion object {
-        fun of(site: VitalsSite) = Runs({ VitalsExtensions.start(site, it) }, { VitalsExtensions.end(it as VitalsRun?) })
+        /** Runs of the site `site` gives, asked for only when a run starts and the session measures. */
+        fun of(site: () -> VitalsSite?) = Runs(
+            { ms -> if (VitalsExtensions.measuring) site()?.let { VitalsExtensions.start(it, ms) } else null },
+            { VitalsExtensions.end(it as VitalsRun?) },
+        )
     }
 }
 
@@ -57,12 +63,12 @@ internal class TargetChanges<T>(initial: T, private val runs: Runs) {
     fun finished() = runs.stop()
 }
 
-/** The call's site, found on its first composition (null before start, or with no app frame). */
+/** The call's runs, its site recorded on its first composition (null before start). */
 @Composable
 internal fun rememberRuns(fn: String, name: String?, prop: String? = null): Runs? = remember {
     if (!VitalsExtensions.started) return@remember null
     VitalsExtensions.setFramework("Compose")
-    VitalsExtensions.site(Throwable().stackTrace, name, fn, prop)?.let { Runs.of(it) }
+    Runs.of(VitalsExtensions.siteHere(name, fn, prop))
 }
 
 /** Ends the call's run when it leaves the composition. */

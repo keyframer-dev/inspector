@@ -98,6 +98,8 @@ class Script(
             say("  $id: ${list.size} samples, t ${(list.first()["t"] as Double).toLong()}..${(list.last()["t"] as Double).toLong()} ms, v ${vs.min()}..${vs.max()}")
         }
         say("frames: ${frames.size} windows, fps ${frames.map { (it["fps"] as Double).toInt() }.take(12)}..., ${drops.size} long frames")
+        // At t, how long, and how much of it was the inspector's own work.
+        say("  long frames: " + drops.take(12).joinToString { d -> "t=${(d["t"] as Double).toLong()} ${d["ms"]} ms" + ((d["inspectorMs"] as? Double)?.let { " (inspector $it ms)" } ?: "") })
         say("markers: " + markers.groupBy { it["kind"] }.map { (k, v) -> "$k x${v.size}" } + " routes ${markers.filter { it["kind"] == "navigation" }.map { it["route"] }}")
         for (a in anims.take(6)) {
             val site = a["site"].asMap()

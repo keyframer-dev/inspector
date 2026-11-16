@@ -1,5 +1,7 @@
 package dev.keyframer.vitals.internal
 
+import dev.keyframer.vitals.KeyframerVitals
+
 /** Where a tracked animation is in the app: `VitalsSiteRef` of protocol/vitals.ts, the two kinds Android sends. */
 internal sealed class SiteRef {
     /** A name the developer gave (`kfTrack("card")`, a Compose label), plus the class it was written in when the build keeps it. */
@@ -68,5 +70,38 @@ internal object StackSites {
             else -> return null
         }
         return SiteInfo(ref, fn, component, prop)
+    }
+}
+
+/**
+ * A tracked call's site, read when first needed: from a stack recorded where the call was made, or from
+ * its name alone when that is the whole site (a build without class names keeps no `type`). Recording a
+ * stack (`Throwable()`) costs a fraction of reading it, and most sites are never needed: only a session
+ * that measures reads one, once. Main thread.
+ */
+internal class LazySite private constructor(
+    private var taken: Throwable?,
+    private val name: String?,
+    private val fn: String,
+    private val prop: String?,
+    private var site: SiteInfo?,
+) {
+    /** The site, or null when the stack holds no app frame and the call has no name. */
+    fun get(): SiteInfo? {
+        val t = taken ?: return site
+        taken = null
+        site = StackSites.site(t.stackTrace, name, fn, prop, KeyframerVitals.keepClassNames)
+        return site
+    }
+
+    companion object {
+        /** The site of the call this is made from: `name` (masked), else its first app frame. */
+        fun of(name: String?, fn: String, prop: String?): LazySite {
+            val masked = name?.let { Redact.maskText(it) }
+            if (!masked.isNullOrBlank() && !KeyframerVitals.keepClassNames) {
+                return LazySite(null, masked, fn, prop, StackSites.site(emptyArray(), masked, fn, prop, false))
+            }
+            return LazySite(Throwable(), masked, fn, prop, null)
+        }
     }
 }

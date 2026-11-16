@@ -17,18 +17,19 @@ export 'src/client.dart'
         KfTiming,
         KfTouch,
         sanitizeArgs;
-export 'src/controller.dart' show KfAnimationController, KfTrackController, KfTrackNotifier, curveName, kfCaptureSites;
+export 'src/controller.dart'
+    show
+        KfAnimationController,
+        KfTrackController,
+        KfTrackNotifier,
+        curveName,
+        kfCaptureSites,
+        kfInspectorDefaultEnabled;
 export 'src/flutter_host.dart' show FlutterKfHost;
 export 'src/frame_meter.dart' show FrameMeter;
 export 'src/inspector.dart'
-    show
-        KeyframerInspector,
-        KfInspectorConnection,
-        connectKeyframerInspector,
-        registerReplay,
-        registerScenario,
-        kfInspectorDefaultEnabled;
-export 'src/navigation.dart' show KfNavigatorObserver, kfNavigatorObserver;
+    show KeyframerInspector, KfInspectorConnection, connectKeyframerInspector, registerReplay, registerScenario;
+export 'src/navigation.dart' show KfNavigatorObserver, kfNavigatorObserver, KeyframerScreen;
 export 'src/protocol.dart';
 export 'src/runtime.dart' show KfRuntime, KfSignal, KfSink;
 export 'src/time_control.dart' show KfClock;

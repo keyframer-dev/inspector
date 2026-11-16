@@ -1,4 +1,4 @@
-#if canImport(UIKit)
+#if canImport(UIKit) && (DEBUG || KEYFRAMER_INSPECTOR_RELEASE)
 import ObjectiveC
 import QuartzCore
 import UIKit
@@ -37,7 +37,7 @@ extension CALayer {
     @objc func kf_add(_ anim: CAAnimation, forKey key: String?) {
         if let key, key.hasPrefix("kf.") { return kf_add(anim, forKey: key) }
         // The stack is taken here, synchronously: later, the code that started it is gone.
-        let replacement = AnimationTap.willAdd(anim, forKey: key, to: self)
+        let replacement = AnimationTap.isActive ? OwnTime.measure { AnimationTap.willAdd(anim, forKey: key, to: self) } : nil
         kf_add(replacement ?? anim, forKey: key)
     }
 }
@@ -66,19 +66,21 @@ enum AnimationTap {
     /// Read from any thread before anything costly (the stack) is taken.
     nonisolated(unsafe) static var isActive = false
 
-    /// Returns an edited copy when the panel overrides this call site's parameters.
+    /// Returns an edited copy when the panel overrides this call site's parameters. The stack is taken
+    /// as return addresses only (never `Thread.callStackSymbols`, which looks up every frame's symbol
+    /// on the main thread, in the frame the animation starts).
     static func willAdd(_ anim: CAAnimation, forKey key: String?, to layer: CALayer) -> CAAnimation? {
         guard isActive else { return nil }
+        let stack = CapturedStack.capture()
         if Thread.isMainThread {
             return MainActor.assumeIsolated {
                 guard let inspector = Inspector.shared else { return Handoff(nil) }
-                return Handoff(inspector.willAdd(anim, forKey: key, to: layer, symbols: Thread.callStackSymbols))
+                return Handoff(inspector.willAdd(anim, forKey: key, to: layer, stack: stack))
             }.value
         }
         // Off the main thread (rare): reported, never edited.
-        let symbols = Thread.callStackSymbols
         DispatchQueue.main.async {
-            _ = Inspector.shared?.willAdd(anim, forKey: key, to: layer, symbols: symbols, editable: false)
+            OwnTime.measure { _ = Inspector.shared?.willAdd(anim, forKey: key, to: layer, stack: stack, editable: false) }
         }
         return nil
     }

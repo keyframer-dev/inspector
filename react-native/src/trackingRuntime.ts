@@ -10,6 +10,7 @@
  */
 
 import type { InspectorMotionTracking } from '../../protocol/inspector'
+import { inspectorWork } from './ownTime'
 import { MotionTracking } from './tracking'
 import { currentRoute, liveStyles, registeredSignals, registeredStyles, signalRoutes, slotChurn, tapInspector, tapJsScroll, tapTouches } from './runtime'
 
@@ -84,10 +85,11 @@ function start(): State {
     }
   }
   readChurn(true)
-  const churnTimer = setInterval(() => readChurn(), CHURN_EVERY_MS)
+  // What its timers do is the inspector's own work (ownTime.ts).
+  const churnTimer = setInterval(inspectorWork(() => readChurn()), CHURN_EVERY_MS)
   // UI work, a second at a time, while a holder wants it and can watch the UI thread.
   let stopSample: (() => void) | null = null
-  const sample = () => {
+  const sample = inspectorWork(() => {
     const by = [...holders].find((h) => h.sampling && h.watchWork)
     if (!by || stopSample) return
     stopSample = by.watchWork!((rows) => {
@@ -98,7 +100,7 @@ function start(): State {
       stopSample?.()
       stopSample = null
     }, SAMPLE_MS)
-  }
+  })
   const firstSample = setTimeout(sample, 200)
   const sampleTimer = setInterval(sample, SAMPLE_EVERY_MS)
   return {

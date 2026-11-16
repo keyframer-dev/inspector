@@ -5,7 +5,8 @@
  *
  * It samples every shared value the app rendered, measures both threads' frames, keeps every
  * animation that starts (with its JS stack) and every React commit, takes a screenshot now and then,
- * and takes markers from outside: touches, navigation, app state, keyboard, logs.
+ * and takes markers from outside: touches, navigation, app state, keyboard, logs. Its own work on the
+ * JS thread is timed (ownTime.ts), so a JS frame drop says how much of it was the inspector's.
  *
  * Pure TypeScript with the clock, frame loop, UI-thread meter and screenshot function injected, so it
  * runs under vitest; recordNative.ts wires it to React Native.
@@ -25,9 +26,11 @@ import type {
   InspectorTask,
   InspectorUiWork,
 } from '../../protocol/inspector'
-import { captureStack, sanitizeArgs, type CaptureScreen } from './client'
+import { sanitizeArgs, type CaptureScreen } from './client'
+import { stackOf } from './stack'
 import { watchCommits } from './commits'
 import { createFrameMeter, tickFrameMeter } from './frameMeter'
+import { enterInspector, inspectorTotalMs, inspectorWork, leaveInspector, timeInspector } from './ownTime'
 import { closeSamplerWindow, inSamplerWindow, samplerWindow, type SamplerWindow } from './samplerWindow'
 import { createInspector, isInspectorInstalled, registeredSignals, registeredStyles, renderHints, restingOffsets, tapInspector, tapScrollMounts } from './runtime'
 import { watchTasks } from './tasks'
@@ -111,7 +114,7 @@ export function startRecorder(opts: RecorderOptions): Recorder {
     if (e.kind !== 'anim' || anims.length >= MAX_ITEMS) return
     const thread = e.thread ?? 'js'
     // Taps run synchronously inside the instrumented call: the stack still holds the app code.
-    anims.push({ t: elapsed(), thread, site: e.site, args: sanitizeArgs(e.args), ...(thread === 'js' ? { stack: captureStack() } : {}) })
+    anims.push({ t: elapsed(), thread, site: e.site, args: sanitizeArgs(e.args), ...(thread === 'js' ? { stack: stackOf(e) } : {}) })
   })
 
   // Shared values: on the UI thread every frame (what was on screen, at the frame's time) when the
@@ -133,10 +136,13 @@ export function startRecorder(opts: RecorderOptions): Recorder {
     // The new instance is sampled from the next tick, not the next poll.
     if (mounted && opts.sampleUi && !restartQueued) {
       restartQueued = true
-      setTimeout(() => {
-        restartQueued = false
-        if (!stopped) startUiSampling()
-      }, 0)
+      setTimeout(
+        inspectorWork(() => {
+          restartQueued = false
+          if (!stopped) startUiSampling()
+        }),
+        0,
+      )
     }
   }
   const startUiSampling = () => {
@@ -174,29 +180,39 @@ export function startRecorder(opts: RecorderOptions): Recorder {
     }
   }
   const sampleTimer = opts.sampleUi
-    ? setInterval(startUiSampling, 250)
-    : setInterval(() => {
-        if (samples.length >= MAX_SAMPLES) return
-        const t = elapsed()
-        for (const [id, { sv }] of registeredSignals()) {
-          const v = (sv as { value?: unknown } | null)?.value
-          if (typeof v !== 'number' || !Number.isFinite(v)) continue
-          samples.push({ id, t, v })
-          sampled.add(id)
-        }
-      }, opts.sampleMs ?? 16)
+    ? setInterval(inspectorWork(startUiSampling), 250)
+    : setInterval(
+        inspectorWork(() => {
+          if (samples.length >= MAX_SAMPLES) return
+          const t = elapsed()
+          for (const [id, { sv }] of registeredSignals()) {
+            const v = (sv as { value?: unknown } | null)?.value
+            if (typeof v !== 'number' || !Number.isFinite(v)) continue
+            samples.push({ id, t, v })
+            sampled.add(id)
+          }
+        }),
+        opts.sampleMs ?? 16,
+      )
   if (opts.sampleUi) startUiSampling()
 
-  // JS thread frames.
+  // JS thread frames, with the inspector's own work in each long one: what ran since the last frame,
+  // while what this callback does counts toward the next.
   const jsMeter = createFrameMeter('js')
+  timeInspector(true)
   const jsFrame = () => {
     if (stopped) return
-    tickFrameMeter(jsMeter, elapsed())
-    if (frames.length < MAX_ITEMS) frames.push(...jsMeter.stats.splice(0))
-    else jsMeter.stats.length = 0
-    if (drops.length < MAX_ITEMS) drops.push(...jsMeter.drops.splice(0))
-    else jsMeter.drops.length = 0
-    requestFrame?.(jsFrame)
+    enterInspector()
+    try {
+      tickFrameMeter(jsMeter, elapsed(), inspectorTotalMs())
+      if (frames.length < MAX_ITEMS) frames.push(...jsMeter.stats.splice(0))
+      else jsMeter.stats.length = 0
+      if (drops.length < MAX_ITEMS) drops.push(...jsMeter.drops.splice(0))
+      else jsMeter.drops.length = 0
+      requestFrame?.(jsFrame)
+    } finally {
+      leaveInspector()
+    }
   }
   requestFrame?.(jsFrame)
 
@@ -283,6 +299,7 @@ export function startRecorder(opts: RecorderOptions): Recorder {
 
   const finish = (note?: string): InspectorRecording => {
     stopped = true
+    timeInspector(false)
     clearInterval(sampleTimer)
     stopUiSampling?.()
     if (shotTimer) clearInterval(shotTimer)

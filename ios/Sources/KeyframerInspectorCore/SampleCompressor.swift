@@ -1,3 +1,4 @@
+#if DEBUG || KEYFRAMER_INSPECTOR_RELEASE
 import Foundation
 
 /// Drops repeated values from per-frame samples without changing what the panel draws.
@@ -47,3 +48,4 @@ public struct SampleCompressor: Sendable {
         return out.sorted { $0.t < $1.t }
     }
 }
+#endif

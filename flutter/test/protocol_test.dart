@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:keyframer_inspector/keyframer_inspector.dart';
+import 'package:keyframer_inspector/src/own_time.dart';
 
 import 'support/fakes.dart';
 
@@ -20,7 +21,11 @@ final _updateEnv = Platform.environment['KF_UPDATE_GOLDENS'] == '1';
 /// Every message type a Flutter app sends, from one scripted session.
 Map<String, Map<String, Object?>> session() {
   final out = <String, Map<String, Object?>>{};
+  final ownClock = KfOwnTime.clock;
   fakeAsync((async) {
+    // The inspector's own time on the session's clock: it works only where the script says.
+    KfOwnTime.clock = () => async.elapsed.inMicroseconds;
+    KfOwnTime.take();
     final rt = KfRuntime()..appPackage = 'demo';
     final connector = FakeConnector();
     final host = FakeFullHost();
@@ -59,7 +64,9 @@ Map<String, Map<String, Object?>> session() {
       async.elapse(const Duration(microseconds: 16667));
       host.onFrame!();
     }
-    async.elapse(const Duration(milliseconds: 34));
+    // A long frame, 4 ms of it the inspector's own work.
+    async.elapse(const Duration(milliseconds: 30));
+    KfOwnTime.measure(() => async.elapseBlocking(const Duration(milliseconds: 4)));
     host.onFrame!();
     host.onTimings!([
       for (var i = 1; i <= 16; i++) KfTiming(rasterEnd: 9000 + i * 16.667, rasterMs: i == 8 ? 25 : 3.5, buildMs: 2),
@@ -148,6 +155,7 @@ Map<String, Map<String, Object?>> session() {
     client.dispose();
     async.flushMicrotasks();
   });
+  KfOwnTime.clock = ownClock;
   out['frameError'] = KfAppMessage.frame(
     id: 'frame-2',
     error: 'Nothing to capture: KeyframerInspector is not mounted.',

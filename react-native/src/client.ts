@@ -20,6 +20,8 @@
  *     editor, puts the speed back to normal.
  *   - While an editor is in the room, what animates now (trackingRuntime.ts: what is mounted, restarts,
  *     remounts, the cost per list cell) goes with `samples` every `trackingMs`.
+ *   - The client's own work on the JS thread (handling messages, encoding and sending, sampling) is
+ *     timed while recording (ownTime.ts), so a JS frame drop says how much of it was the inspector's.
  *
  * Pure TypeScript with the socket and timers injected, so it runs under vitest. React Native apps
  * import `connectInspector` from '@keyframerdev/inspector/native', which adds the UI-thread hook.
@@ -52,6 +54,7 @@ import { clampScale, clampStep } from './clock'
 import { watchCommits } from './commits'
 import { closeSamplerWindow, inSamplerWindow, samplerWindow, type SamplerWindow } from './samplerWindow'
 import { createFrameMeter, tickFrameMeter } from './frameMeter'
+import { enterInspector, inspectorTotalMs, inspectorWork, leaveInspector, timeInspector } from './ownTime'
 import { REACT_NATIVE_THREADS } from './platforms'
 import {
   applyScrollSamples,
@@ -68,7 +71,7 @@ import {
 import { PROTOCOL, SDK } from './version'
 import { runScenario, scenarioNames, watchScenarios } from './scenarios'
 import { watchTasks } from './tasks'
-import { captureStack } from './stack'
+import { stackOf } from './stack'
 import { holdTracking, type TrackingHandle } from './trackingRuntime'
 
 export { captureStack } from './stack'
@@ -348,12 +351,14 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   const catalog = new Map<string, InspectorEvent>()
   const enqueue = (e: InspectorEvent) => {
     if (e.kind === 'anim') {
+      const reported = e
       e = { ...e, args: sanitizeArgs(e.args) }
       // While recording, place it on the recording's clock and keep where it was called from. Called
-      // synchronously from the hook, so the stack still holds the app code that started it.
+      // synchronously from the hook, so the stack still holds the app code that started it (taken once
+      // per event: the device recorder keeps the same one).
       if (isRecording()) {
         e.t = Math.round(now() - recordStart)
-        if (e.thread !== 'ui') e.stack = captureStack()
+        if (e.thread !== 'ui') e.stack = stackOf(reported)
       }
     } else if (e.kind === 'unsignal') {
       // Gone (its screen unmounted): a panel that connects later is not told about it.
@@ -412,10 +417,16 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   let said: AppFacts = {}
 
   const sendRaw = (msg: unknown) => {
-    if (socket && socket.readyState === OPEN) socket.send(JSON.stringify(msg))
+    if (!socket || socket.readyState !== OPEN) return
+    enterInspector()
+    try {
+      socket.send(JSON.stringify(msg))
+    } finally {
+      leaveInspector()
+    }
   }
 
-  const flush = () => {
+  const flush = inspectorWork(() => {
     if (!socket || socket.readyState !== OPEN || greeted !== socket) return
     if (queue.length) {
       sendRaw({ type: 'events', events: queue })
@@ -442,7 +453,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       tasks = []
       work = []
     }
-  }
+  })
   const flushTimer = setInterval(flush, batchMs)
 
   // ── What animates now, for the editors in the room ─────────────────────
@@ -458,13 +469,16 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       tracking = holdTracking({ ...(watchWork ? { watchWork: (onRows) => watchWork(onRows) } : {}), hz: () => said.display?.hz ?? 0 })
       tracking.sampleWork(true)
       const t = tracking
-      trackingTimer = setInterval(() => {
-        try {
-          trackingDue = t.summary()
-        } catch {
-          // What the app has mounted could not be read this time: the next one will be.
-        }
-      }, trackingMs)
+      trackingTimer = setInterval(
+        inspectorWork(() => {
+          try {
+            trackingDue = t.summary()
+          } catch {
+            // What the app has mounted could not be read this time: the next one will be.
+          }
+        }),
+        trackingMs,
+      )
     } else if (!on && tracking) {
       tracking.release()
       tracking = null
@@ -476,7 +490,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   const connection: Connection = {
     send(msg) {
       if (!socket || socket.readyState !== OPEN) return false
-      socket.send(JSON.stringify(msg))
+      sendRaw(msg)
       return true
     },
   }
@@ -486,13 +500,13 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   // ── record: sample listed shared values ────────────────────────────────
   let recordStart = 0
   let sampleTimer: ReturnType<typeof setInterval> | null = null
-  const sampleOnce = () => {
+  const sampleOnce = inspectorWork(() => {
     const t = now() - recordStart
     for (const id of recording) {
       const v = inspector.signals.get(id)?.value
       if (typeof v === 'number' && Number.isFinite(v)) samples.push({ id, t, v })
     }
-  }
+  })
   // On the UI thread every frame when a bridge can (React Native), mapped onto the recording's clock
   // by the smallest offset seen; a JS timer otherwise.
   const uiSampler = bridges.find((b) => b.sampleValues)
@@ -540,10 +554,13 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   const restartSampling = () => {
     if (!uiSampler || restartQueued) return
     restartQueued = true
-    setTimeout(() => {
-      restartQueued = false
-      if (isRecording()) startUiSampling()
-    }, 0)
+    setTimeout(
+      inspectorWork(() => {
+        restartQueued = false
+        if (isRecording()) startUiSampling()
+      }),
+      0,
+    )
   }
   // The JS thread's frames, measured while recording; the UI thread's come from the bridges.
   const requestFrame =
@@ -563,15 +580,23 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
   const jsFrame = () => {
     const m = jsMeter
     if (!m || disposed) return
-    tickFrameMeter(m, now() - recordStart)
-    if (m.stats.length) frames.push(...m.stats.splice(0))
-    if (m.drops.length) drops.push(...m.drops.splice(0))
-    requestFrame?.(jsFrame)
+    // The inspector's own work since the last frame is this frame's; what this callback does counts
+    // toward the next one.
+    enterInspector()
+    try {
+      tickFrameMeter(m, now() - recordStart, inspectorTotalMs())
+      if (m.stats.length) frames.push(...m.stats.splice(0))
+      if (m.drops.length) drops.push(...m.drops.splice(0))
+      requestFrame?.(jsFrame)
+    } finally {
+      leaveInspector()
+    }
   }
   const measureFrames = (on: boolean) => {
     if (on && !jsMeter) {
       bridgeOffset = Infinity
       jsMeter = createFrameMeter('js')
+      timeInspector(true)
       requestFrame?.(jsFrame)
       unwatchCommits = watchCommits(
         (c) => {
@@ -584,6 +609,8 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         withMarkers?.watchMarkers?.(
           () => now() - recordStart,
           (m) => {
+            // A visibility marker goes on a recorded value's track: one not recorded has no samples.
+            if (m.kind === 'visibility' && !recordAll && !recording.has(m.id)) return
             if (markers.length < MAX_QUEUED_EVENTS) markers.push(m)
           },
           said,
@@ -651,6 +678,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         stopWatching?.()
       }
     } else if (!on) {
+      if (jsMeter) timeInspector(false)
       jsMeter = null
       unwatchCommits?.()
       unwatchCommits = null
@@ -837,11 +865,25 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
 
   const onMessage = (data: unknown) => {
     if (typeof data !== 'string' || data === PONG) return
+    // Handling it is the inspector's own work (ownTime.ts). What it asks the app's code to run (a
+    // replay, a reload, a scenario) runs after, as the app's.
+    let then: (() => void) | null = null
+    enterInspector()
+    try {
+      then = handleMessage(data)
+    } finally {
+      leaveInspector()
+    }
+    then?.()
+  }
+
+  /** Does what a message from an editor or the room says. Returns what it asks of the app's own code. */
+  const handleMessage = (data: string): (() => void) | null => {
     let msg: InspectorEditorMessage | InspectorPresenceMessage
     try {
       msg = JSON.parse(data)
     } catch {
-      return
+      return null
     }
     switch (msg.type) {
       case 'time': {
@@ -859,11 +901,9 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         for (const b of bridges) b.setOverrides?.(msg.overrides ?? {})
         break
       case 'replay':
-        replayFn?.()
-        break
+        return replayFn
       case 'reload':
-        reload?.()
-        break
+        return reload
       case 'record':
         setRecording(msg.signalIds ?? [], !!msg.on, typeof msg.recorder === 'string' ? msg.recorder : '')
         break
@@ -873,9 +913,10 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       case 'capture':
         capture(msg)
         break
-      case 'scenario':
-        void runScenario(msg.name, now).then((r) => sendRaw({ type: 'scenarioDone', name: msg.name, ...r }))
-        break
+      case 'scenario': {
+        const name = msg.name
+        return () => void runScenario(name, now).then((r) => sendRaw({ type: 'scenarioDone', name, ...r }))
+      }
       case 'presence':
         if (msg.editors > editors) {
           if (greeted === socket) {
@@ -897,6 +938,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
         followTracking(editors > 0)
         break
     }
+    return null
   }
 
   /** What the app says when it connects: who it is, what it can do, what it measured about the device. */
@@ -970,7 +1012,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       reconnectTimer = setTimeout(connect, backoff)
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
     }
-    const hello = (facts: AppFacts) => {
+    const hello = inspectorWork((facts: AppFacts) => {
       if (socket !== s || s.readyState !== OPEN || greeted === s) return
       said = facts
       s.send(JSON.stringify(helloMessage(facts)))
@@ -981,7 +1023,7 @@ export function connectInspector(opts: ConnectInspectorOptions): () => void {
       // A hello means normal speed: an app still slowed or paused says so right after it.
       if (timeDue || timeScale() !== 1) sendRaw({ type: 'time', scale: timeScale() })
       timeDue = false
-    }
+    })
     s.onopen = () => {
       backoff = 500
       if (!reached && failures >= UNREACHABLE_TRIES) warn?.(`keyframer-inspector: reached ${opts.apiUrl}`)

@@ -36,7 +36,8 @@
       "t": 334,
       "thread": "js",
       "ms": 34.0,
-      "dropped": 1
+      "dropped": 1,
+      "inspectorMs": 4.0
     },
     {
       "t": 201,
